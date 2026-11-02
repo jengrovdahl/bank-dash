@@ -45,6 +45,16 @@
   .btn:disabled { opacity: .55; cursor: default; }
   .grid { display: grid; gap: 12px; }
   .cards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .board { display: grid; gap: 14px; align-items: start; }
+  .board-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .board-item { border-radius: 12px; transition: opacity .15s; }
+  .board-item[draggable="true"] > .card { cursor: grab; }
+  .board-item.dragging { opacity: .4; }
+  .board-item.over { outline: 2px dashed var(--accent); outline-offset: 4px; }
+  .board-tail { min-height: 8px; border-radius: 10px; font-size: 12px; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+  .board-tail.active { min-height: 70px; border: 2px dashed var(--line); }
+  .board-tail.over { border-color: var(--accent); color: var(--accent); }
+  .linkbtn { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
   .bigcards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); align-items: start; }
   .bankcard .projrow { display: flex; gap: 18px; margin: 12px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); }
   .bankcard .projrow .kpi b { font-size: 17px; }
@@ -414,26 +424,18 @@ function LineChart({ points, low, height = 160 }) {
 
 // ===================== screens =====================
 function MiniChart({ points, low, height = 70 }) {
-  const ref = useRef(null);
-  const [w, setW] = useState(300);
-  useEffect(() => {
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    if (ref.current) ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, []);
   const vals = points.map((p) => p.v).filter((v) => v !== null);
-  if (!vals.length) return <div ref={ref} />;
+  if (!vals.length) return null;
+  const W = 300;
   const min = Math.min(...vals, low ?? Infinity), max = Math.max(...vals);
-  const X = (i) => (i / Math.max(1, points.length - 1)) * (w - 2) + 1;
+  const X = (i) => (i / Math.max(1, points.length - 1)) * W;
   const Y = (v) => 4 + (1 - (v - min) / (max - min || 1)) * (height - 8);
   const d = points.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join("");
   return (
-    <div ref={ref} style={{ width: "100%" }}>
-      <svg width={w} height={height} role="img" aria-label="Projected balance, next 90 days">
-        {low !== undefined && low >= min && low <= max && <line x1="0" x2={w} y1={Y(low)} y2={Y(low)} stroke="var(--warn)" strokeDasharray="3 3" />}
-        <path d={d} fill="none" stroke="var(--accent)" strokeWidth="2" />
-      </svg>
-    </div>
+    <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }} role="img" aria-label="Projected balance, next 90 days">
+      {low !== undefined && low >= min && low <= max && <line x1="0" x2={W} y1={Y(low)} y2={Y(low)} stroke="var(--warn)" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
+      <path d={d} fill="none" stroke="var(--accent)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
 
@@ -457,7 +459,6 @@ function BankCard({ a, m, settings, today }) {
             <div className="kpi">In 30 days<b>{money(in30)}</b></div>
             <div className="kpi">Lowest, next 60 days<b className={lowest && lowest.end < settings.lowBalance ? "neg" : ""}>{lowest ? money(lowest.end) : "—"}</b>{lowest && <span className="muted" style={{ fontSize: 12 }}>{shortDate(lowest.date)}</span>}</div>
           </div>
-          <MiniChart points={fut.slice(0, 91).map((d) => ({ d: d.date, v: d.end }))} low={settings.lowBalance} />
           <div className="sub-h">Coming up · next 30 days</div>
           <div className="list">
             {upcoming.length === 0 && <div className="muted" style={{ fontSize: 13 }}>No bills or deposits scheduled for this account.</div>}
@@ -499,35 +500,110 @@ function DebtCard({ a, recurring, accounts, today }) {
   );
 }
 
-function Overview({ data, settings, models }) {
+// Cards arranged in columns that you can drag between. The layout is saved per column count
+// (a wide laptop and a narrow one can each have their own), in the database so it follows you.
+function CardBoard({ ids, render, layoutKey, prefs, settings, onSaved, minWidth = 380 }) {
+  const ref = useRef(null);
+  const [ncols, setNcols] = useState(() => Math.max(1, Math.floor((Math.min(window.innerWidth, 1200) - 32 + 14) / (minWidth + 14))));
+  const [dragId, setDragId] = useState(null);
+  const [over, setOver] = useState(null);
+  const [local, setLocal] = useState(null);
+  useEffect(() => {
+    const ro = new ResizeObserver(([e]) => setNcols(Math.max(1, Math.floor((e.contentRect.width + 14) / (minWidth + 14)))));
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [minWidth]);
+  let saved = {};
+  try { saved = JSON.parse(prefs?.[layoutKey] || "{}"); } catch {}
+  const stored = local?.[ncols] || saved[ncols];
+  // Build columns: stored order first, then any new accounts on the shortest column.
+  const cols = Array.from({ length: ncols }, (_, i) => (stored?.[i] || []).filter((id) => ids.includes(id)));
+  const placed = new Set(cols.flat());
+  ids.filter((id) => !placed.has(id)).forEach((id) => { const c = cols.reduce((m, col, i) => (col.length < cols[m].length ? i : m), 0); cols[c].push(id); });
+
+  const save = async (next) => {
+    const all = { ...saved, ...(local || {}), [ncols]: next };
+    setLocal(all);
+    try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [layoutKey, JSON.stringify(all)]); onSaved && onSaved(); } catch {}
+  };
+  const drop = (colIdx, beforeId) => {
+    if (!dragId) return;
+    const next = cols.map((c) => c.filter((id) => id !== dragId));
+    const col = next[colIdx];
+    const at = beforeId ? col.indexOf(beforeId) : col.length;
+    col.splice(at < 0 ? col.length : at, 0, dragId);
+    setDragId(null); setOver(null);
+    save(next);
+  };
+  const reset = async () => {
+    const all = { ...saved, ...(local || {}) }; delete all[ncols];
+    setLocal(all);
+    try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [layoutKey, JSON.stringify(all)]); onSaved && onSaved(); } catch {}
+  };
+  const canDrag = ncols > 1;
+  return (
+    <div ref={ref}>
+      <div className="board" style={{ gridTemplateColumns: `repeat(${ncols}, minmax(0, 1fr))` }}>
+        {cols.map((col, ci) => (
+          <div key={ci} className="board-col">
+            {col.map((id) => (
+              <div key={id} className={"board-item" + (dragId === id ? " dragging" : "") + (over === id ? " over" : "")}
+                draggable={canDrag}
+                onDragStart={(e) => { setDragId(id); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", id); } catch {} }}
+                onDragEnd={() => { setDragId(null); setOver(null); }}
+                onDragOver={(e) => { if (dragId) { e.preventDefault(); if (over !== id) setOver(id); } }}
+                onDrop={(e) => { e.preventDefault(); drop(ci, id); }}>
+                {render(id)}
+              </div>
+            ))}
+            {canDrag && (
+              <div className={"board-tail" + (over === "tail" + ci ? " over" : "") + (dragId ? " active" : "")}
+                onDragOver={(e) => { if (dragId) { e.preventDefault(); if (over !== "tail" + ci) setOver("tail" + ci); } }}
+                onDrop={(e) => { e.preventDefault(); drop(ci, null); }}>
+                {dragId ? "Drop here" : ""}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {canDrag && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Drag cards by their top to rearrange. {stored ? <button className="linkbtn" onClick={reset}>Reset layout</button> : null}</div>}
+    </div>
+  );
+}
+
+function Overview({ data, settings, models, reload }) {
   const { accounts, sync } = data;
   const visible = accounts.filter((a) => !a.hidden);
   const cash = visible.filter((a) => a.kind === "checking" || a.kind === "savings").reduce((s, a) => s + (a.balance || 0), 0);
   const debt = visible.filter((a) => a.kind === "credit" || a.kind === "loan").reduce((s, a) => s + (a.balance || 0), 0);
   const today = todayStr();
   const last = sync[0];
-  const [acctTab, setAcctTab] = useState("bank");
+  const [acctTab, setAcctTab] = useState("checking");
   const mainId = defaultPrimary(accounts);
   const kindOrder = { checking: 0, savings: 1, other: 2 };
-  const bankAccts = visible.filter((a) => a.kind !== "credit" && a.kind !== "loan").sort((x, y) => (y.id === mainId) - (x.id === mainId) || (kindOrder[x.kind] ?? 3) - (kindOrder[y.kind] ?? 3));
-  const debtAccts = visible.filter((a) => a.kind === "credit" || a.kind === "loan");
-  const list = acctTab === "bank" ? bankAccts : debtAccts;
+  const groups = {
+    checking: visible.filter((a) => a.kind === "checking" || a.kind === "other").sort((x, y) => (y.id === mainId) - (x.id === mainId)),
+    savings: visible.filter((a) => a.kind === "savings"),
+    debt: visible.filter((a) => a.kind === "credit" || a.kind === "loan"),
+  };
+  const sum = (l) => l.reduce((t, a) => t + (a.balance || 0), 0);
+  const list = groups[acctTab];
 
   return (
     <div className="grid" style={{ gap: 16 }}>
       {last && !last.ok && <div className="warnbox">Last sync failed {ago(last.ran_at)}: {last.message}</div>}
       {last && last.ok && /warning/.test(last.message || "") && <div className="warnbox">{last.message}. A bank probably needs you to sign in again on SimpleFIN.</div>}
       <nav className="tabs" style={{ marginBottom: 0 }}>
-        {[["bank", `Bank accounts · ${money(cash)}`], ["debt", `Loans & credit cards · ${money(debt)}`]].map(([k, l]) => (
+        {[["checking", `Checking · ${money(sum(groups.checking))}`], ["savings", `Savings · ${money(sum(groups.savings))}`], ["debt", `Loans & cards · ${money(sum(groups.debt))}`]].map(([k, l]) => (
           <button key={k} className={acctTab === k ? "on" : ""} onClick={() => setAcctTab(k)}>{l}</button>
         ))}
       </nav>
       {list.length === 0 && <div className="muted">No accounts here yet. Add them in SimpleFIN Bridge and they'll show up after the next sync.</div>}
-      <div className={"grid " + (acctTab === "bank" ? "bigcards" : "cards")}>
-        {list.map((a) => acctTab === "bank"
-          ? <BankCard key={a.id} a={a} m={models[a.id]} settings={settings} today={today} />
-          : <DebtCard key={a.id} a={a} recurring={data.recurring} accounts={accounts} today={today} />)}
-      </div>
+      <CardBoard key={acctTab} ids={list.map((a) => a.id)} layoutKey={"layout_" + acctTab} minWidth={acctTab === "debt" ? 300 : 380}
+        prefs={data.prefs} settings={settings} onSaved={reload}
+        render={(id) => { const a = accounts.find((x) => x.id === id); return acctTab !== "debt"
+          ? <BankCard a={a} m={models[a.id]} settings={settings} today={today} />
+          : <DebtCard a={a} recurring={data.recurring} accounts={accounts} today={today} />; }} />
     </div>
   );
 }
@@ -897,7 +973,7 @@ function App() {
       const dep = {}; const cutoff = addDays(todayStr(), -60);
       for (const t of txs) if (t.amount > 0 && t.posted >= cutoff) dep[t.account_id] = (dep[t.account_id] || 0) + t.amount;
       PRIMARY_AUTO = accounts.filter((a) => a.kind === "checking" && !a.hidden).sort((a, b) => (dep[b.id] || 0) - (dep[a.id] || 0))[0]?.id || "";
-      setData({ accounts, txs, recurring, sync });
+      setData({ accounts, txs, recurring, sync, prefs: Object.fromEntries(prefs.map((r) => [r.key, r.value])) });
     } catch (e) {
       if (/no such table/i.test(e.message)) setErr("first-sync");
       else setErr(e.message);
@@ -954,7 +1030,7 @@ function App() {
       {err && err !== "first-sync" && <div className="warnbox">{err} <button className="btn small" onClick={() => setTab("settings")}>Settings</button></div>}
 
       {tab === "settings" && <Settings settings={settings} setSettings={setSettings} data={data || { accounts: [], sync: [] }} onChanged={load} toast={toast} />}
-      {data && tab === "overview" && <Overview data={data} settings={settings} models={models} />}
+      {data && tab === "overview" && <Overview data={data} settings={settings} models={models} reload={load} />}
       {data && tab === "calendar" && <CalendarView data={data} models={models} settings={settings} acctId={acctId} setAcctId={setAcctId} />}
       {data && tab === "ledger" && <Ledger data={data} models={models} acctId={acctId} setAcctId={setAcctId} />}
       {data && tab === "transactions" && <Transactions data={data} settings={settings} onChanged={load} toast={toast} />}
