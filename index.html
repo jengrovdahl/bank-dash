@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bank Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f2e9; --panel: #fffdf8; --panel2: #efe9dc; --ink: #22302a; --muted: #6b7568;
+    --line: #ddd5c4; --accent: #3f6b4f; --accent-ink: #ffffff; --bill: #b1502c; --bill-soft: #f6e1d6;
+    --income: #2c7a4b; --income-soft: #dcefe2; --spent: #8a6d1f; --spent-soft: #f3e9c9;
+    --transfer: #4b5f86; --transfer-soft: #e1e7f3; --warn: #a33a2a; --warn-soft: #f8dcd6;
+    --shadow: 0 1px 2px rgba(34,48,42,.06), 0 6px 18px rgba(34,48,42,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151a17; --panel: #1d2420; --panel2: #252e29; --ink: #ece8de; --muted: #9aa597;
+      --line: #313b35; --accent: #7fb08d; --accent-ink: #10150f; --bill: #e08a66; --bill-soft: #3a2820;
+      --income: #74c08f; --income-soft: #1f3327; --spent: #d6b660; --spent-soft: #332c19;
+      --transfer: #9bb0d8; --transfer-soft: #222a3a; --warn: #f08c7a; --warn-soft: #3d221d;
+      --shadow: 0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 "IBM Plex Sans", system-ui, sans-serif; }
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .mono, .num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .app { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  header.top h1 { font-size: 26px; }
+  header.top .sub { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  nav.tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  nav.tabs button { background: none; border: 0; padding: 10px 14px; font: inherit; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  nav.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .btn { background: var(--panel); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn.small { padding: 4px 8px; font-size: 13px; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .grid { display: grid; gap: 12px; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); }
+  .card .org { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .card .name { font-weight: 600; margin: 2px 0 8px; }
+  .card .bal { font-size: 24px; font-weight: 500; }
+  .card .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .stale { color: var(--warn); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+  .row > * { flex: 1 1 320px; }
+  .kpi { font-size: 13px; color: var(--muted); }
+  .kpi b { display: block; font-size: 22px; color: var(--ink); font-family: "IBM Plex Mono", monospace; font-weight: 500; }
+  .neg { color: var(--bill); }
+  .pos { color: var(--income); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; position: sticky; top: 0; background: var(--panel); }
+  td.num, th.num { text-align: right; }
+  tr.today td { background: var(--income-soft); }
+  tr.future td { color: var(--muted); }
+  tr.future td.bal { color: var(--ink); }
+  .tablewrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .chip { display: inline-block; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; margin: 1px 2px 1px 0; white-space: nowrap; }
+  .chip.bills, .chip.bill { background: var(--bill-soft); color: var(--bill); }
+  .chip.income, .chip.deposit { background: var(--income-soft); color: var(--income); }
+  .chip.spent { background: var(--spent-soft); color: var(--spent); }
+  .chip.transfer { background: var(--transfer-soft); color: var(--transfer); }
+  .chip.paid { text-decoration: line-through; opacity: .7; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal .dow { font-size: 11px; color: var(--muted); text-align: center; text-transform: uppercase; padding: 4px 0; }
+  .cal .day { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-height: 96px; padding: 5px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+  .cal .day.out { opacity: .4; }
+  .cal .day.today { outline: 2px solid var(--accent); }
+  .cal .day.low { background: var(--warn-soft); }
+  .cal .day .d { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  .cal .day .eb { font-size: 11.5px; font-family: "IBM Plex Mono", monospace; margin-top: auto; text-align: right; }
+  @media (max-width: 700px) { .cal .day { min-height: 64px; } .cal .day .chip { display: none; } .cal .day .dots { display: flex; } }
+  .dots { display: none; gap: 3px; }
+  .eb .short { display: none; }
+  @media (max-width: 700px) { .eb .full { display: none; } .eb .short { display: inline; } }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .note { background: var(--panel2); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+  .warnbox { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+  .muted { color: var(--muted); }
+  .list { display: flex; flex-direction: column; }
+  .list .li { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .list .li:last-child { border-bottom: 0; }
+  .list .when { width: 74px; color: var(--muted); font-size: 13px; }
+  .list .what { flex: 1; }
+  .list .amt { width: 100px; text-align: right; }
+  .list .after { width: 110px; text-align: right; color: var(--muted); font-size: 13px; }
+  .drawer { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: flex-end; z-index: 10; }
+  .drawer > div { width: min(460px, 100%); background: var(--panel); height: 100%; overflow: auto; padding: 18px; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 14px; z-index: 20; }
+  svg.chart text { fill: var(--muted); font-size: 11px; font-family: "IBM Plex Mono", monospace; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ===================== settings =====================
+const LS_KEY = "bankdash.settings.v1";
+const DEFAULTS = {
+  tursoUrl: "libsql://bank-dashboard-jengrovdahl.aws-us-east-2.turso.io",
+  tursoToken: "",
+  ghRepo: "jengrovdahl/bank-dashboard",
+  ghToken: "",
+  primaryAccount: "",
+  lowBalance: 500,
+  horizonMonths: 18,
+  projectSpending: true,
+};
+function loadSettings() {
+  try { return { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(LS_KEY)) || {}) }; } catch { return { ...DEFAULTS }; }
+}
+function saveSettings(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {} }
+
+// ===================== Turso over HTTP =====================
+function httpUrl(u) { return (u || "").trim().replace(/^libsql:\/\//, "https://").replace(/\/$/, ""); }
+function toArg(v) {
+  if (v === null || v === undefined || v === "") return { type: "null" };
+  if (typeof v === "number") return Number.isInteger(v) ? { type: "integer", value: String(v) } : { type: "float", value: v };
+  return { type: "text", value: String(v) };
+}
+function fromVal(c) {
+  if (!c || c.type === "null") return null;
+  if (c.type === "integer") return Number(c.value);
+  if (c.type === "float") return Number(c.value);
+  return c.value;
+}
+async function tursoBatch(s, stmts) {
+  const res = await fetch(httpUrl(s.tursoUrl) + "/v2/pipeline", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + s.tursoToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [...stmts.map(([sql, args = []]) => ({ type: "execute", stmt: { sql, args: args.map(toArg) } })), { type: "close" }] }),
+  });
+  if (res.status === 401 || res.status === 403) throw new Error("The database token was rejected. Check it in Settings.");
+  if (!res.ok) throw new Error("Database error " + res.status);
+  const data = await res.json();
+  return data.results.slice(0, stmts.length).map((r) => {
+    if (r.type === "error") throw new Error(r.error?.message || "Query failed");
+    const { cols, rows } = r.response.result;
+    return rows.map((row) => Object.fromEntries(row.map((c, i) => [cols[i].name, fromVal(c)])));
+  });
+}
+const q = async (s, sql, args) => (await tursoBatch(s, [[sql, args]]))[0];
+
+// ===================== dates & money =====================
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return ymd(d); };
+const diffDays = (a, b) => Math.round((parse(a) - parse(b)) / 86400000);
+const todayStr = () => ymd(new Date());
+const dim = (y, m) => new Date(y, m + 1, 0).getDate();
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOWU = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const fmtUSD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const money = (n) => (n === null || n === undefined || isNaN(n) ? "" : fmtUSD.format(n));
+const shortDate = (s) => { const d = parse(s); return `${DOW[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`; };
+const ago = (iso) => {
+  if (!iso) return "never";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 60) return mins + " min ago";
+  if (mins < 60 * 36) return Math.round(mins / 60) + " hr ago";
+  return Math.round(mins / 1440) + " days ago";
+};
+
+// ===================== recurring schedule =====================
+function occurrences(r, from, to) {
+  const out = [];
+  if (!r.active) return out;
+  const start = r.anchor_date && r.anchor_date > from ? r.anchor_date : from;
+  const end = r.end_date && r.end_date < to ? r.end_date : to;
+  if (start > end) return out;
+  const f = r.frequency;
+  if (f === "monthly" || f === "quarterly") {
+    const s = parse(start); const e = parse(end);
+    const step = f === "quarterly" ? 3 : 1;
+    let y = s.getFullYear(), m = s.getMonth();
+    if (f === "quarterly" && r.anchor_date) {
+      const a = parse(r.anchor_date);
+      while (((y - a.getFullYear()) * 12 + (m - a.getMonth())) % 3 !== 0) { m++; if (m > 11) { m = 0; y++; } }
+    }
+    const day = r.day || (r.anchor_date ? parse(r.anchor_date).getDate() : 1);
+    while (y < e.getFullYear() || (y === e.getFullYear() && m <= e.getMonth())) {
+      const ds = ymd(new Date(y, m, Math.min(day, dim(y, m))));
+      if (ds >= start && ds <= end) out.push(ds);
+      m += step; while (m > 11) { m -= 12; y++; }
+    }
+  } else if (f === "weekly" || f === "biweekly") {
+    const step = f === "weekly" ? 7 : 14;
+    const anchor = r.anchor_date || from;
+    let k = Math.ceil(diffDays(start, anchor) / step);
+    if (k < 0) k = 0;
+    for (let d = addDays(anchor, k * step); d <= end; d = addDays(d, step)) if (d >= start) out.push(d);
+  } else if (f === "semimonthly") {
+    const s = parse(start), e = parse(end);
+    let y = s.getFullYear(), m = s.getMonth();
+    const d1 = r.day || 1;
+    while (y < e.getFullYear() || (y === e.getFullYear() && m <= e.getMonth())) {
+      for (const d of [d1, Math.min(d1 + 15, dim(y, m))]) {
+        const ds = ymd(new Date(y, m, Math.min(d, dim(y, m))));
+        if (ds >= start && ds <= end && !out.includes(ds)) out.push(ds);
+      }
+      m++; if (m > 11) { m = 0; y++; }
+    }
+  } else if (f === "yearly") {
+    if (!r.anchor_date) return out;
+    const a = parse(r.anchor_date);
+    for (let y = parse(start).getFullYear(); y <= parse(end).getFullYear(); y++) {
+      const ds = ymd(new Date(y, a.getMonth(), Math.min(a.getDate(), dim(y, a.getMonth()))));
+      if (ds >= start && ds <= end) out.push(ds);
+    }
+  } else if (f === "once") {
+    if (r.anchor_date && r.anchor_date >= from && r.anchor_date <= to) out.push(r.anchor_date);
+  }
+  return out;
+}
+
+function safeRe(p) { try { return p ? new RegExp(p, "i") : null; } catch { return null; } }
+const catOf = (t) => t.category_override || t.category || (t.amount > 0 ? "deposit" : "spent");
+const defaultPrimary = (accounts) => (accounts.find((a) => a.kind === "checking" && !a.hidden) || accounts[0])?.id || "";
+
+// Build a full model for one account: past days from transactions, future from recurring.
+function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
+  const today = todayStr();
+  if (!account) return { days: [], occ: [] };
+  const primary = settings.primaryAccount || defaultPrimary(accounts);
+  const acctTx = txs.filter((t) => t.account_id === account.id);
+  const recs = recurring.filter((r) => r.active && ((r.account_id || primary) === account.id));
+
+  // Mark scheduled items as already paid if a matching transaction shows up near the date.
+  const occ = [];
+  const lookFrom = from < addDays(today, -45) ? from : addDays(today, -45);
+  for (const r of recs) {
+    const re = safeRe(r.match);
+    for (const d of occurrences(r, lookFrom, to)) {
+      const sign = r.kind === "income" ? 1 : -1;
+      let paid = null;
+      if (d <= addDays(today, 5)) {
+        paid = acctTx.find((t) => Math.sign(t.amount) === sign && Math.abs(diffDays(t.posted, d)) <= 5 &&
+          (re ? re.test(t.description || "") : true) && Math.abs(Math.abs(t.amount) - r.amount) <= Math.max(5, r.amount * 0.2)) || null;
+      }
+      occ.push({ date: d, rec: r, amount: sign * r.amount, paid });
+    }
+  }
+  // Unpaid items from the last 5 days are treated as still coming (bank may not have posted yet).
+  const pendingCutoff = addDays(today, -5);
+  const projectedOcc = occ.filter((o) => !o.paid && (o.date > today || (o.date >= pendingCutoff && o.date <= today)));
+
+  const earliest = acctTx.reduce((m, t) => (t.posted < m ? t.posted : m), today);
+  const bal = account.balance ?? 0;
+
+  // Past end-of-day balance = current balance minus everything posted after that day.
+  const byDay = {};
+  for (const t of acctTx) (byDay[t.posted] ||= []).push(t);
+  const futurePosted = acctTx.filter((t) => t.posted > today).reduce((a, t) => a + t.amount, 0);
+
+  const days = [];
+  // walk backward for the past
+  let running = bal - futurePosted;
+  const pastDays = [];
+  for (let d = today; d >= from; d = addDays(d, -1)) {
+    if (d <= to) pastDays.push({ date: d, end: d < earliest ? null : running });
+    running -= (byDay[d] || []).reduce((a, t) => a + t.amount, 0);
+  }
+  pastDays.reverse();
+  const occByDay = {};
+  for (const o of occ) (occByDay[o.date] ||= []).push(o);
+  const projByDay = {};
+  for (const o of projectedOcc) {
+    const d = o.date < today ? today : o.date;
+    (projByDay[d] ||= []).push(o);
+  }
+
+  for (const p of pastDays) {
+    const list = byDay[p.date] || [];
+    const sum = (c) => list.filter((t) => c(catOf(t), t)).reduce((a, t) => a + t.amount, 0);
+    let end = p.end;
+    let projectedToday = [];
+    if (p.date === today) {
+      projectedToday = projByDay[today] || [];
+      end = end + projectedToday.reduce((a, o) => a + o.amount, 0);
+    }
+    days.push({
+      date: p.date, actual: true, end, noData: p.end === null, txs: list,
+      spent: -sum((c, t) => c === "spent" && t.amount < 0),
+      bills: -sum((c, t) => (c === "bills" || c === "transfer") && t.amount < 0) + -projectedToday.filter((o) => o.amount < 0).reduce((a, o) => a + o.amount, 0),
+      plus: sum((c, t) => t.amount > 0) + projectedToday.filter((o) => o.amount > 0).reduce((a, o) => a + o.amount, 0),
+      occ: occByDay[p.date] || [], projected: projectedToday,
+    });
+  }
+  // Typical everyday spending (card swipes, not scheduled bills), averaged over recent history.
+  const histDays = Math.min(60, diffDays(today, earliest));
+  const spentRecent = acctTx.filter((t) => t.posted > addDays(today, -histDays) && t.posted <= today && t.amount < 0 && catOf(t) === "spent")
+    .reduce((a, t) => a - t.amount, 0);
+  const avgSpend = settings.projectSpending !== false && histDays >= 14 ? spentRecent / histDays : 0;
+
+  // future
+  let fb = days.length ? days[days.length - 1].end ?? bal : bal;
+  for (let d = addDays(today, 1); d <= to; d = addDays(d, 1)) {
+    const list = projByDay[d] || [];
+    const posted = byDay[d] || [];
+    const delta = list.reduce((a, o) => a + o.amount, 0) - avgSpend;
+    fb += delta;
+    days.push({
+      date: d, actual: false, end: fb, txs: posted, occ: occByDay[d] || [], projected: list,
+      spent: avgSpend, estSpent: avgSpend > 0,
+      bills: -list.filter((o) => o.amount < 0).reduce((a, o) => a + o.amount, 0),
+      plus: list.filter((o) => o.amount > 0).reduce((a, o) => a + o.amount, 0),
+    });
+  }
+  return { days, occ, earliest, avgSpend };
+}
+
+// ===================== CSV =====================
+function downloadCSV(name, rows) {
+  if (!rows.length) return;
+  const cols = Object.keys(rows[0]);
+  const esc = (v) => { const s = v === null || v === undefined ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const csv = [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ===================== GitHub "refresh now" =====================
+async function gh(s, path, opts = {}) {
+  const res = await fetch("https://api.github.com/repos/" + s.ghRepo + path, {
+    ...opts,
+    headers: { Authorization: "Bearer " + s.ghToken, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers || {}) },
+  });
+  if (res.status === 401 || res.status === 403) throw new Error("GitHub token was rejected. Check it in Settings.");
+  if (res.status === 404) throw new Error("GitHub couldn't find the sync workflow. Check the repo name in Settings.");
+  if (!res.ok && res.status !== 204) throw new Error("GitHub error " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+// ===================== UI bits =====================
+function Money({ v, signed, className = "" }) {
+  if (v === null || v === undefined || isNaN(v)) return <span className="num muted">—</span>;
+  const cls = signed ? (v < 0 ? "neg" : v > 0 ? "pos" : "") : "";
+  return <span className={`num ${cls} ${className}`}>{money(v)}</span>;
+}
+
+function LineChart({ points, low, height = 160 }) {
+  const ref = useRef(null);
+  const [w, setW] = useState(600);
+  useEffect(() => {
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  if (!points.length) return <div ref={ref} />;
+  const vals = points.map((p) => p.v).filter((v) => v !== null);
+  const min = Math.min(0, low ?? 0, ...vals), max = Math.max(...vals, 1);
+  const pad = { l: 64, r: 10, t: 10, b: 22 };
+  const X = (i) => pad.l + (i / Math.max(1, points.length - 1)) * (w - pad.l - pad.r);
+  const Y = (v) => pad.t + (1 - (v - min) / (max - min || 1)) * (height - pad.t - pad.b);
+  const path = points.map((p, i) => (p.v === null ? "" : `${i === 0 || points[i - 1].v === null ? "M" : "L"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`)).join("");
+  const ticks = [min, (min + max) / 2, max];
+  const months = points.map((p, i) => ({ p, i })).filter(({ p }) => p.d.endsWith("-01"));
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      <svg className="chart" width={w} height={height} role="img" aria-label="Projected balance">
+        {ticks.map((t, i) => (<g key={i}><line x1={pad.l} x2={w - pad.r} y1={Y(t)} y2={Y(t)} stroke="var(--line)" /><text x={pad.l - 6} y={Y(t) + 4} textAnchor="end">{Math.round(t).toLocaleString()}</text></g>))}
+        {low ? <line x1={pad.l} x2={w - pad.r} y1={Y(low)} y2={Y(low)} stroke="var(--warn)" strokeDasharray="4 4" /> : null}
+        {months.map(({ p, i }) => (<text key={p.d} x={X(i)} y={height - 6} textAnchor="middle">{MON[parse(p.d).getMonth()].slice(0, 3)}</text>))}
+        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2" />
+      </svg>
+    </div>
+  );
+}
+
+// ===================== screens =====================
+function Overview({ data, settings, models, setTab, refresh, refreshing, reload }) {
+  const { accounts, sync } = data;
+  const visible = accounts.filter((a) => !a.hidden);
+  const cash = visible.filter((a) => a.kind === "checking" || a.kind === "savings").reduce((s, a) => s + (a.balance || 0), 0);
+  const debt = visible.filter((a) => a.kind === "credit" || a.kind === "loan").reduce((s, a) => s + (a.balance || 0), 0);
+  const primary = accounts.find((a) => a.id === (settings.primaryAccount || defaultPrimary(accounts)));
+  const m = primary ? models[primary.id] : null;
+  const today = todayStr();
+  const fut = m ? m.days.filter((d) => d.date >= today) : [];
+  const next60 = fut.slice(0, 61);
+  const lowest = next60.reduce((lo, d) => (d.end !== null && (lo === null || d.end < lo.end) ? d : lo), null);
+  const upcoming = fut.slice(0, 22).flatMap((d) => d.projected.map((o) => ({ ...o, on: d.date, after: d.end })));
+  const last = sync[0];
+
+  return (
+    <div className="grid" style={{ gap: 16 }}>
+      <div className="row">
+        <div className="card"><div className="kpi">Cash across accounts<b>{money(cash)}</b></div></div>
+        <div className="card"><div className="kpi">Owed on cards &amp; loans<b className={debt < 0 ? "neg" : ""}>{money(debt)}</b></div></div>
+        <div className="card">
+          <div className="kpi">Lowest in next 60 days{primary ? ` · ${primary.nickname || primary.name}` : ""}
+            <b className={lowest && lowest.end < settings.lowBalance ? "neg" : ""}>{lowest ? money(lowest.end) : "—"}</b>
+          </div>
+          {lowest && <div className="muted" style={{ fontSize: 13 }}>on {shortDate(lowest.date)}</div>}
+        </div>
+      </div>
+
+      {last && !last.ok && <div className="warnbox">Last sync failed {ago(last.ran_at)}: {last.message}</div>}
+      {last && last.ok && /warning/.test(last.message || "") && <div className="warnbox">{last.message}. A bank probably needs you to sign in again on SimpleFIN.</div>}
+
+      <div className="grid cards">
+        {visible.map((a) => {
+          const staleDays = a.balance_date ? diffDays(today, a.balance_date) : 99;
+          return (
+            <div className="card" key={a.id}>
+              <div className="org">{a.org}</div>
+              <div className="name">{a.nickname || a.name}</div>
+              <div className="bal"><Money v={a.balance} /></div>
+              {a.available !== null && a.available !== a.balance && <div className="meta">Available {money(a.available)}</div>}
+              <div className={"meta " + (staleDays > 2 ? "stale" : "")}>Bank data as of {a.balance_date ? shortDate(a.balance_date) : "—"}{staleDays > 2 ? " · stale" : ""}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {m && (
+        <div className="card">
+          <div className="toolbar" style={{ marginBottom: 6 }}>
+            <h3 style={{ fontSize: 18 }}>Projected balance · {primary.nickname || primary.name}</h3>
+            <span className="spacer" />
+            <button className="btn small" onClick={() => setTab("calendar")}>Open calendar</button>
+          </div>
+          {m.avgSpend > 0 && <p className="muted" style={{ fontSize: 13, margin: "0 0 6px" }}>Includes scheduled bills and paychecks, plus your typical everyday spending of about {money(m.avgSpend)}/day.</p>}
+          <LineChart low={settings.lowBalance} points={fut.slice(0, 366).map((d) => ({ d: d.date, v: d.end }))} />
+        </div>
+      )}
+
+      <div className="row">
+        <div className="card">
+          <h3 style={{ fontSize: 18, marginBottom: 6 }}>Coming up · next 3 weeks</h3>
+          <div className="list">
+            {upcoming.length === 0 && <div className="muted">Nothing scheduled.</div>}
+            {upcoming.map((o, i) => (
+              <div className="li" key={i}>
+                <span className="when">{shortDate(o.on)}{o.date < today ? <div className="chip bill">late?</div> : null}</span>
+                <span className="what">{o.rec.name}</span>
+                <span className="amt"><Money v={o.amount} signed /></span>
+                <span className="after num">→ {money(o.after)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="card">
+          <h3 style={{ fontSize: 18, marginBottom: 6 }}>Sync</h3>
+          <p className="muted" style={{ marginTop: 0 }}>Updates nightly around 3 AM. Last run: <b>{last ? ago(last.ran_at) : "not yet"}</b>{last ? ` · ${last.new_transactions} new` : ""}.</p>
+          <div className="toolbar">
+            <button className="btn primary" onClick={refresh} disabled={refreshing}>{refreshing ? refreshing : "Refresh now"}</button>
+            <button className="btn" onClick={reload}>Reload page data</button>
+          </div>
+          <p className="muted" style={{ fontSize: 13 }}>Refresh now pulls the newest data SimpleFIN has. SimpleFIN itself checks each bank about once a day, so a purchase from an hour ago may not show yet.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccountPicker({ accounts, value, onChange }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      {accounts.map((a) => (<option key={a.id} value={a.id}>{a.nickname || a.name} · {a.org}</option>))}
+    </select>
+  );
+}
+
+function CalendarView({ data, models, settings, acctId, setAcctId }) {
+  const today = todayStr();
+  const [ym, setYm] = useState(() => { const d = new Date(); return [d.getFullYear(), d.getMonth()]; });
+  const [sel, setSel] = useState(null);
+  const m = models[acctId];
+  const byDate = useMemo(() => Object.fromEntries((m?.days || []).map((d) => [d.date, d])), [m]);
+  const [y, mo] = ym;
+  const first = new Date(y, mo, 1);
+  const startPad = first.getDay();
+  const cells = [];
+  for (let i = 0; i < startPad; i++) cells.push(ymd(new Date(y, mo, i - startPad + 1)));
+  for (let d = 1; d <= dim(y, mo); d++) cells.push(ymd(new Date(y, mo, d)));
+  while (cells.length % 7) cells.push(addDays(cells[cells.length - 1], 1));
+  const move = (n) => { let nm = mo + n, ny = y; while (nm < 0) { nm += 12; ny--; } while (nm > 11) { nm -= 12; ny++; } setYm([ny, nm]); };
+  const sd = sel ? byDate[sel] : null;
+
+  return (
+    <div>
+      <div className="toolbar">
+        <button className="btn" onClick={() => move(-1)} aria-label="Previous month">‹</button>
+        <h2 style={{ fontSize: 22, minWidth: 190, textAlign: "center" }}>{MON[mo]} {y}</h2>
+        <button className="btn" onClick={() => move(1)} aria-label="Next month">›</button>
+        <button className="btn small" onClick={() => { const d = new Date(); setYm([d.getFullYear(), d.getMonth()]); }}>Today</button>
+        <span className="spacer" />
+        <AccountPicker accounts={data.accounts} value={acctId} onChange={setAcctId} />
+      </div>
+      <div className="cal">
+        {DOW.map((d) => <div className="dow" key={d}>{d}</div>)}
+        {cells.map((c) => {
+          const d = byDate[c];
+          const inMonth = parse(c).getMonth() === mo;
+          const low = d && d.end !== null && d.end < settings.lowBalance && c >= today;
+          const chips = d ? [
+            ...d.occ.map((o) => ({ cls: (o.rec.kind === "income" ? "income" : "bill") + (o.paid ? " paid" : ""), t: o.rec.name, color: o.rec.kind === "income" ? "var(--income)" : "var(--bill)" })),
+            ...(d.actual && d.spent > 0 ? [{ cls: "spent", t: "spent " + Math.round(d.spent), color: "var(--spent)" }] : []),
+          ] : [];
+          return (
+            <div key={c} className={`day ${inMonth ? "" : "out"} ${c === today ? "today" : ""} ${low ? "low" : ""}`} onClick={() => setSel(c)}>
+              <div className="d"><span>{parse(c).getDate()}</span></div>
+              <div>{chips.slice(0, 4).map((x, i) => <span key={i} className={"chip " + x.cls}>{x.t}</span>)}{chips.length > 4 && <span className="muted" style={{ fontSize: 11 }}>+{chips.length - 4}</span>}</div>
+              <div className="dots">{chips.map((x, i) => <i key={i} style={{ background: x.color }} />)}</div>
+              <div className="eb">{d && d.end !== null ? <><span className="full">{money(d.end)}</span><span className="short">{(d.end / 1000).toFixed(1)}k</span></> : ""}</div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="muted" style={{ fontSize: 13 }}>Bottom number = end-of-day balance (actual for past days, projected after today). Red days dip under {money(settings.lowBalance)}. Crossed-out bills already posted.</p>
+      {sd && (
+        <div className="drawer" onClick={() => setSel(null)}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <div className="toolbar"><h2 style={{ fontSize: 20 }}>{shortDate(sel)}</h2><span className="spacer" /><button className="btn small" onClick={() => setSel(null)}>Close</button></div>
+            <p>End of day: <b><Money v={sd.end} /></b> {sd.actual ? "" : <span className="muted">(projected)</span>}</p>
+            {sd.occ.length > 0 && <><h3 style={{ fontSize: 16 }}>Scheduled</h3><div className="list">{sd.occ.map((o, i) => (
+              <div className="li" key={i}><span className="what">{o.rec.name} {o.paid ? <span className="chip income">posted</span> : null}</span><span className="amt"><Money v={o.amount} signed /></span></div>))}</div></>}
+            {sd.txs.length > 0 && <><h3 style={{ fontSize: 16, marginTop: 12 }}>Transactions</h3><div className="list">{sd.txs.map((t) => (
+              <div className="li" key={t.id}><span className="what">{t.description}{t.pending ? <span className="chip spent">pending</span> : null} <span className={"chip " + catOf(t)}>{catOf(t)}</span></span><span className="amt"><Money v={t.amount} signed /></span></div>))}</div></>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Ledger({ data, models, acctId, setAcctId }) {
+  const today = todayStr();
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const m = models[acctId];
+  const rows = (m?.days || []).filter((d) => d.date.startsWith(month));
+  const notesFor = (d) => {
+    const names = [...d.occ.filter((o) => d.actual ? o.paid : true).map((o) => o.rec.name), ...(d.actual ? d.projected.map((o) => o.rec.name + " (expected)") : []),...(d.actual ? d.txs.filter((t) => catOf(t) !== "spent" && !d.occ.some((o) => o.paid && o.paid.id === t.id)).map((t) => (t.description || "").split(" — ")[0].slice(0, 28)) : [])];
+    return [...new Set(names)].join(", ");
+  };
+  const months = [];
+  for (let i = -3; i <= 18; i++) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + i); months.push(ymd(d).slice(0, 7)); }
+  const exportRows = rows.map((d) => ({ day: DOWU[parse(d.date).getDay()], date: d.date, spent: d.spent ? (d.estSpent ? "~" : "") + d.spent.toFixed(2) : "", bills: d.bills ? d.bills.toFixed(2) : "", plus: d.plus ? d.plus.toFixed(2) : "", balance: d.end !== null ? d.end.toFixed(2) : "", notes: notesFor(d) }));
+  return (
+    <div>
+      <div className="toolbar">
+        <AccountPicker accounts={data.accounts} value={acctId} onChange={setAcctId} />
+        <select value={month} onChange={(e) => setMonth(e.target.value)}>{months.map((mm) => <option key={mm} value={mm}>{MON[Number(mm.slice(5)) - 1]} {mm.slice(0, 4)}</option>)}</select>
+        <span className="spacer" />
+        <button className="btn small" onClick={() => downloadCSV(`ledger-${month}.csv`, exportRows)}>Export CSV</button>
+      </div>
+      <div className="tablewrap">
+        <table>
+          <thead><tr><th>Day</th><th>Date</th><th className="num">(−) spent</th><th className="num">(−) bills</th><th className="num">(+)</th><th className="num">Balance</th><th>Notes</th></tr></thead>
+          <tbody>
+            {rows.map((d) => (
+              <tr key={d.date} className={d.date === today ? "today" : d.date > today ? "future" : ""}>
+                <td>{DOWU[parse(d.date).getDay()]}</td>
+                <td className="num">{d.date.slice(5).replace("-", "/")}</td>
+                <td className="num">{d.spent ? (d.estSpent ? <span className="muted" title="typical daily spending">~{money(d.spent)}</span> : money(d.spent)) : ""}</td>
+                <td className="num">{d.bills ? money(d.bills) : ""}</td>
+                <td className="num">{d.plus ? money(d.plus) : ""}</td>
+                <td className="num bal">{d.noData ? <span className="muted">no data</span> : money(d.end)}</td>
+                <td style={{ fontSize: 13 }}>{notesFor(d)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted" style={{ fontSize: 13 }}>Same layout as your budget sheet. Past days come from the bank. Days after today are projected from Bills &amp; Income{m?.avgSpend ? <>, plus your typical everyday spending (~{money(m.avgSpend)}/day, shown with ~)</> : null}.</p>
+    </div>
+  );
+}
+
+const CATS = ["spent", "bills", "deposit", "transfer"];
+function Transactions({ data, settings, onChanged, toast }) {
+  const [search, setSearch] = useState("");
+  const [acct, setAcct] = useState("all");
+  const [cat, setCat] = useState("all");
+  const acctName = (id) => { const a = data.accounts.find((x) => x.id === id); return a ? a.nickname || a.name : ""; };
+  const rows = data.txs
+    .filter((t) => acct === "all" || t.account_id === acct)
+    .filter((t) => cat === "all" || catOf(t) === cat)
+    .filter((t) => !search || (t.description || "").toLowerCase().includes(search.toLowerCase()) || String(Math.abs(t.amount)).includes(search))
+    .sort((a, b) => (a.posted < b.posted ? 1 : a.posted > b.posted ? -1 : 0));
+  const setCategory = async (t, c) => {
+    try {
+      await q(settings, "UPDATE transactions SET category_override = ? WHERE id = ?", [c === t.category ? null : c, t.id]);
+      onChanged(); toast("Category updated");
+    } catch (e) { toast(e.message); }
+  };
+  const addRule = async (t) => {
+    const word = prompt("Always categorize transactions containing this text:", (t.description || "").split(/\s+/).slice(0, 2).join(" "));
+    if (!word) return;
+    const c = prompt("…as which category? (spent, bills, deposit, transfer)", catOf(t));
+    if (!CATS.includes(c)) return;
+    try {
+      await q(settings, "INSERT INTO rules (pattern, category) VALUES (?, ?)", [word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), c]);
+      toast("Rule saved. It applies from the next sync.");
+    } catch (e) { toast(e.message); }
+  };
+  return (
+    <div>
+      <div className="toolbar">
+        <input placeholder="Search description or amount" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 220 }} />
+        <select value={acct} onChange={(e) => setAcct(e.target.value)}><option value="all">All accounts</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name}</option>)}</select>
+        <select value={cat} onChange={(e) => setCat(e.target.value)}><option value="all">All categories</option>{CATS.map((c) => <option key={c}>{c}</option>)}</select>
+        <span className="spacer" />
+        <span className="muted" style={{ fontSize: 13 }}>{rows.length} shown</span>
+        <button className="btn small" onClick={() => downloadCSV("transactions.csv", rows.map((t) => ({ date: t.posted, account: acctName(t.account_id), description: t.description, amount: t.amount, category: catOf(t), pending: t.pending ? "yes" : "" })))}>Export CSV</button>
+      </div>
+      <div className="tablewrap">
+        <table>
+          <thead><tr><th>Date</th><th>Account</th><th>Description</th><th className="num">Amount</th><th>Category</th><th></th></tr></thead>
+          <tbody>
+            {rows.slice(0, 1000).map((t) => (
+              <tr key={t.id}>
+                <td className="num">{t.posted.slice(5).replace("-", "/")}</td>
+                <td style={{ fontSize: 13 }}>{acctName(t.account_id)}</td>
+                <td>{t.description}{t.pending ? <span className="chip spent" style={{ marginLeft: 6 }}>pending</span> : null}</td>
+                <td className="num"><Money v={t.amount} signed /></td>
+                <td><select value={catOf(t)} onChange={(e) => setCategory(t, e.target.value)}>{CATS.map((c) => <option key={c}>{c}</option>)}</select></td>
+                <td><button className="btn small" onClick={() => addRule(t)} title="Make a rule from this">Rule</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const FREQS = ["monthly", "biweekly", "weekly", "semimonthly", "quarterly", "yearly", "once"];
+const blankRec = { name: "", kind: "bill", amount: "", frequency: "monthly", day: 1, anchor_date: "", end_date: "", match: "", account_id: "", active: 1, notes: "" };
+function Recurring({ data, settings, onChanged, toast }) {
+  const [edit, setEdit] = useState(null);
+  const acctName = (id) => { if (!id) return "Main account"; const a = data.accounts.find((x) => x.id === id); return a ? a.nickname || a.name : "?"; };
+  const today = todayStr();
+  const nextOf = (r) => occurrences(r, today, addDays(today, 400))[0];
+  const save = async () => {
+    const r = edit;
+    if (!r.name || !Number(r.amount)) return toast("Name and amount are required");
+    if (["weekly", "biweekly", "yearly", "once"].includes(r.frequency) && !r.anchor_date) return toast("Pick a start date for that frequency");
+    if (r.match && !safeRe(r.match)) return toast("Match text isn't valid");
+    const args = [r.name, r.kind, Number(r.amount), r.account_id || null, r.frequency, r.day ? Number(r.day) : null, r.anchor_date || null, r.end_date || null, r.match || null, r.active ? 1 : 0, r.notes || null];
+    try {
+      if (r.id) await q(settings, "UPDATE recurring SET name=?, kind=?, amount=?, account_id=?, frequency=?, day=?, anchor_date=?, end_date=?, match=?, active=?, notes=? WHERE id=?", [...args, r.id]);
+      else await q(settings, "INSERT INTO recurring (name, kind, amount, account_id, frequency, day, anchor_date, end_date, match, active, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?)", args);
+      setEdit(null); onChanged(); toast("Saved");
+    } catch (e) { toast(e.message); }
+  };
+  const remove = async (r) => {
+    if (!confirm(`Remove "${r.name}" from your schedule?`)) return;
+    try { await q(settings, "DELETE FROM recurring WHERE id = ?", [r.id]); onChanged(); toast("Removed"); } catch (e) { toast(e.message); }
+  };
+  const list = [...data.recurring].sort((a, b) => (a.kind === b.kind ? (nextOf(a) || "9") < (nextOf(b) || "9") ? -1 : 1 : a.kind === "income" ? -1 : 1));
+  const monthlyOut = data.recurring.filter((r) => r.active && r.kind === "bill").reduce((s, r) => s + r.amount * ({ monthly: 1, biweekly: 26 / 12, weekly: 52 / 12, semimonthly: 2, quarterly: 1 / 3, yearly: 1 / 12, once: 0 }[r.frequency] || 0), 0);
+  const monthlyIn = data.recurring.filter((r) => r.active && r.kind === "income").reduce((s, r) => s + r.amount * ({ monthly: 1, biweekly: 26 / 12, weekly: 52 / 12, semimonthly: 2, quarterly: 1 / 3, yearly: 1 / 12, once: 0 }[r.frequency] || 0), 0);
+  return (
+    <div>
+      <div className="toolbar">
+        <div className="kpi" style={{ marginRight: 18 }}>Avg monthly income<b className="pos">{money(monthlyIn)}</b></div>
+        <div className="kpi" style={{ marginRight: 18 }}>Avg monthly bills<b className="neg">{money(monthlyOut)}</b></div>
+        <div className="kpi">Left over<b>{money(monthlyIn - monthlyOut)}</b></div>
+        <span className="spacer" />
+        <button className="btn primary" onClick={() => setEdit({ ...blankRec })}>Add bill or income</button>
+      </div>
+      <div className="tablewrap">
+        <table>
+          <thead><tr><th>Name</th><th className="num">Amount</th><th>When</th><th>Next</th><th>Ends</th><th>Account</th><th></th></tr></thead>
+          <tbody>
+            {list.map((r) => (
+              <tr key={r.id} style={{ opacity: r.active ? 1 : .5 }}>
+                <td><span className={"chip " + (r.kind === "income" ? "income" : "bill")}>{r.kind}</span> {r.name}</td>
+                <td className="num">{money(r.amount)}</td>
+                <td>{r.frequency}{["monthly", "semimonthly", "quarterly"].includes(r.frequency) ? ` · day ${r.day}` : r.anchor_date ? ` · from ${r.anchor_date}` : ""}</td>
+                <td className="num">{nextOf(r) ? shortDate(nextOf(r)) : "—"}</td>
+                <td className="num">{r.end_date || ""}</td>
+                <td style={{ fontSize: 13 }}>{acctName(r.account_id)}</td>
+                <td style={{ whiteSpace: "nowrap" }}><button className="btn small" onClick={() => setEdit({ ...blankRec, ...r, anchor_date: r.anchor_date || "", end_date: r.end_date || "", match: r.match || "", account_id: r.account_id || "", notes: r.notes || "" })}>Edit</button> <button className="btn small" onClick={() => remove(r)}>Remove</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {edit && (
+        <div className="drawer" onClick={() => setEdit(null)}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ fontSize: 20, marginBottom: 12 }}>{edit.id ? "Edit" : "Add"} {edit.kind === "income" ? "income" : "bill"}</h2>
+            <div className="grid">
+              <label className="f">Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+              <label className="f">Type<select value={edit.kind} onChange={(e) => setEdit({ ...edit, kind: e.target.value })}><option value="bill">Bill / payment</option><option value="income">Income / paycheck</option></select></label>
+              <label className="f">Amount<input type="number" step="0.01" value={edit.amount} onChange={(e) => setEdit({ ...edit, amount: e.target.value })} /></label>
+              <label className="f">How often<select value={edit.frequency} onChange={(e) => setEdit({ ...edit, frequency: e.target.value })}>{FREQS.map((f) => <option key={f}>{f}</option>)}</select></label>
+              {["monthly", "semimonthly", "quarterly"].includes(edit.frequency) && <label className="f">Day of month<input type="number" min="1" max="31" value={edit.day || ""} onChange={(e) => setEdit({ ...edit, day: e.target.value })} /></label>}
+              <label className="f">{["weekly", "biweekly", "yearly", "once"].includes(edit.frequency) ? "Date of one payment (required)" : "Starts on (optional)"}<input type="date" value={edit.anchor_date} onChange={(e) => setEdit({ ...edit, anchor_date: e.target.value })} /></label>
+              <label className="f">Last payment / payoff date (optional)<input type="date" value={edit.end_date} onChange={(e) => setEdit({ ...edit, end_date: e.target.value })} /></label>
+              <label className="f">Account<select value={edit.account_id} onChange={(e) => setEdit({ ...edit, account_id: e.target.value })}><option value="">Main account</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name}</option>)}</select></label>
+              <label className="f">Words that appear on the bank line (helps match it, e.g. <span className="mono">verizon</span> or <span className="mono">amex|american express</span>)<input value={edit.match} onChange={(e) => setEdit({ ...edit, match: e.target.value })} /></label>
+              <label className="f">Notes<input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={!!edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked ? 1 : 0 })} /> Active</label>
+              <div className="toolbar"><button className="btn primary" onClick={save}>Save</button><button className="btn" onClick={() => setEdit(null)}>Cancel</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Settings({ settings, setSettings, data, onChanged, toast }) {
+  const [s, setS] = useState(settings);
+  useEffect(() => setS(settings), [settings]);
+  const saveConn = () => { setSettings(s); toast("Settings saved on this device"); };
+  const updAcct = async (a, field, value) => {
+    try { await q(settings, `UPDATE accounts SET ${field} = ? WHERE id = ?`, [value, a.id]); onChanged(); } catch (e) { toast(e.message); }
+  };
+  return (
+    <div className="grid" style={{ gap: 16, maxWidth: 820 }}>
+      <div className="card grid">
+        <h3 style={{ fontSize: 18 }}>Connection (saved only in this browser)</h3>
+        <label className="f">Turso database URL<input value={s.tursoUrl} onChange={(e) => setS({ ...s, tursoUrl: e.target.value })} /></label>
+        <label className="f">Turso token for this dashboard<input type="password" value={s.tursoToken} onChange={(e) => setS({ ...s, tursoToken: e.target.value })} placeholder="Paste a token created in Turso" /></label>
+        <label className="f">GitHub repo<input value={s.ghRepo} onChange={(e) => setS({ ...s, ghRepo: e.target.value })} /></label>
+        <label className="f">GitHub token for the Refresh button (fine-grained, Actions: read &amp; write, this repo only)<input type="password" value={s.ghToken} onChange={(e) => setS({ ...s, ghToken: e.target.value })} /></label>
+        <div className="row" style={{ gap: 12 }}>
+          <label className="f">Warn me when balance drops under<input type="number" value={s.lowBalance} onChange={(e) => setS({ ...s, lowBalance: Number(e.target.value) })} /></label>
+          <label className="f">Project this many months ahead<input type="number" min="3" max="60" value={s.horizonMonths} onChange={(e) => setS({ ...s, horizonMonths: Number(e.target.value) })} /></label>
+        </div>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}><input type="checkbox" checked={s.projectSpending !== false} onChange={(e) => setS({ ...s, projectSpending: e.target.checked })} /> Include typical everyday spending in projections</label>
+        <label className="f">Main account (where bills come out unless you say otherwise)
+          <select value={s.primaryAccount} onChange={(e) => setS({ ...s, primaryAccount: e.target.value })}><option value="">First checking account</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name} · {a.org}</option>)}</select>
+        </label>
+        <div><button className="btn primary" onClick={saveConn}>Save settings</button></div>
+      </div>
+
+      {data.accounts.length > 0 && (
+        <div className="card">
+          <h3 style={{ fontSize: 18, marginBottom: 8 }}>Accounts</h3>
+          <table>
+            <thead><tr><th>Bank</th><th>Nickname</th><th>Type</th><th>Show</th></tr></thead>
+            <tbody>
+              {data.accounts.map((a) => (
+                <tr key={a.id}>
+                  <td style={{ fontSize: 13 }}>{a.org}<br /><span className="muted">{a.name}</span></td>
+                  <td><input defaultValue={a.nickname || ""} placeholder={a.name} onBlur={(e) => e.target.value !== (a.nickname || "") && updAcct(a, "nickname", e.target.value || null)} /></td>
+                  <td><select value={a.kind || "checking"} onChange={(e) => updAcct(a, "kind", e.target.value)}>{["checking", "savings", "credit", "loan", "other"].map((k) => <option key={k}>{k}</option>)}</select></td>
+                  <td><input type="checkbox" checked={!a.hidden} onChange={(e) => updAcct(a, "hidden", e.target.checked ? 0 : 1)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="card">
+        <h3 style={{ fontSize: 18, marginBottom: 6 }}>Sync history</h3>
+        <table><thead><tr><th>When</th><th>Result</th><th className="num">Accounts</th><th className="num">New</th></tr></thead>
+          <tbody>{data.sync.map((r) => <tr key={r.id}><td>{new Date(r.ran_at).toLocaleString()}</td><td className={r.ok ? "" : "neg"}>{r.message}</td><td className="num">{r.accounts}</td><td className="num">{r.new_transactions}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function Setup({ settings, setSettings }) {
+  const [s, setS] = useState(settings);
+  return (
+    <div className="card grid" style={{ maxWidth: 640, margin: "40px auto" }}>
+      <h2 style={{ fontSize: 24 }}>Connect your dashboard</h2>
+      <p className="muted" style={{ margin: 0 }}>This is a one-time step on each device. Nothing you enter here is in the page's code; it stays in this browser only.</p>
+      <label className="f">Turso database URL<input value={s.tursoUrl} onChange={(e) => setS({ ...s, tursoUrl: e.target.value })} /></label>
+      <label className="f">Turso token<input type="password" value={s.tursoToken} onChange={(e) => setS({ ...s, tursoToken: e.target.value })} placeholder="Paste the token from Turso" /></label>
+      <div><button className="btn primary" disabled={!s.tursoUrl || !s.tursoToken} onClick={() => setSettings(s)}>Connect</button></div>
+    </div>
+  );
+}
+
+// ===================== app =====================
+const TABS = [["overview", "Overview"], ["calendar", "Calendar"], ["ledger", "Ledger"], ["transactions", "Transactions"], ["recurring", "Bills & Income"], ["settings", "Settings"]];
+
+function App() {
+  const [settings, setSettingsState] = useState(loadSettings);
+  const setSettings = (s) => { saveSettings(s); setSettingsState(s); };
+  const [tab, setTab] = useState("overview");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState("");
+  const [msg, setMsg] = useState("");
+  const [acctId, setAcctId] = useState("");
+  const toast = useCallback((m) => { setMsg(m); setTimeout(() => setMsg(""), 3500); }, []);
+
+  const load = useCallback(async () => {
+    if (!settings.tursoToken) return;
+    setLoading(true); setErr("");
+    try {
+      const since = addDays(todayStr(), -400);
+      const [accounts, txs, recurring, sync] = await tursoBatch(settings, [
+        ["SELECT * FROM accounts ORDER BY sort, org, name"],
+        ["SELECT id, account_id, posted, amount, description, pending, category, category_override FROM transactions WHERE posted >= ?", [since]],
+        ["SELECT * FROM recurring ORDER BY kind DESC, day"],
+        ["SELECT * FROM sync_log ORDER BY id DESC LIMIT 15"],
+      ]);
+      setData({ accounts, txs, recurring, sync });
+    } catch (e) {
+      if (/no such table/i.test(e.message)) setErr("first-sync");
+      else setErr(e.message);
+    } finally { setLoading(false); }
+  }, [settings]);
+  useEffect(() => { load(); }, [load]);
+
+  const primaryId = settings.primaryAccount || defaultPrimary(data?.accounts || []);
+  useEffect(() => { if (!acctId && primaryId) setAcctId(primaryId); }, [primaryId, acctId]);
+
+  const models = useMemo(() => {
+    if (!data) return {};
+    const today = todayStr();
+    const from = addDays(today, -120);
+    const to = (() => { const d = new Date(); d.setMonth(d.getMonth() + (settings.horizonMonths || 18)); return ymd(d); })();
+    return Object.fromEntries(data.accounts.map((a) => [a.id, buildModel({ account: a, accounts: data.accounts, txs: data.txs, recurring: data.recurring, settings, from, to })]));
+  }, [data, settings]);
+
+  const refresh = async () => {
+    if (!settings.ghToken) { toast("Add a GitHub token in Settings to use Refresh now"); setTab("settings"); return; }
+    try {
+      setRefreshing("Starting…");
+      const started = new Date(Date.now() - 5000).toISOString();
+      await gh(settings, "/actions/workflows/sync.yml/dispatches", { method: "POST", body: JSON.stringify({ ref: "main" }) });
+      setRefreshing("Syncing…");
+      for (let i = 0; i < 48; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const runs = await gh(settings, "/actions/workflows/sync.yml/runs?per_page=3&event=workflow_dispatch");
+        const run = (runs.workflow_runs || []).find((r) => r.created_at >= started);
+        if (run && run.status === "completed") {
+          await load();
+          toast(run.conclusion === "success" ? "Up to date" : "Sync finished with an error. See Settings → Sync history.");
+          return;
+        }
+      }
+      toast("Still running. Check back in a minute.");
+    } catch (e) { toast(e.message); }
+    finally { setRefreshing(""); }
+  };
+
+  if (!settings.tursoToken) return <div className="app"><Setup settings={settings} setSettings={setSettings} /></div>;
+
+  return (
+    <div className="app">
+      <header className="top">
+        <h1>Bank Dashboard</h1>
+        <span className="sub">{data?.sync?.[0] ? `synced ${ago(data.sync[0].ran_at)}` : ""}{loading ? " · loading…" : ""}</span>
+        <span className="spacer" />
+        <button className="btn primary" onClick={refresh} disabled={!!refreshing}>{refreshing || "Refresh now"}</button>
+      </header>
+      <nav className="tabs">{TABS.map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}</nav>
+
+      {err === "first-sync" && <div className="note">Connected, but the first sync hasn't run yet. Click <b>Refresh now</b> (needs the GitHub token in Settings), or wait for tonight's run.</div>}
+      {err && err !== "first-sync" && <div className="warnbox">{err} <button className="btn small" onClick={() => setTab("settings")}>Settings</button></div>}
+
+      {tab === "settings" && <Settings settings={settings} setSettings={setSettings} data={data || { accounts: [], sync: [] }} onChanged={load} toast={toast} />}
+      {data && tab === "overview" && <Overview data={data} settings={settings} models={models} setTab={setTab} refresh={refresh} refreshing={refreshing} reload={load} />}
+      {data && tab === "calendar" && <CalendarView data={data} models={models} settings={settings} acctId={acctId} setAcctId={setAcctId} />}
+      {data && tab === "ledger" && <Ledger data={data} models={models} acctId={acctId} setAcctId={setAcctId} />}
+      {data && tab === "transactions" && <Transactions data={data} settings={settings} onChanged={load} toast={toast} />}
+      {data && tab === "recurring" && <Recurring data={data} settings={settings} onChanged={load} toast={toast} />}
+      {msg && <div className="toast">{msg}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
