@@ -62,6 +62,8 @@
   .bankcard .list .li { font-size: 14px; padding: 6px 0; }
   .bankcard .list .when { width: 70px; font-size: 12.5px; }
   .bankcard .list .after { width: 96px; }
+  .bankcard .list.recent .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .bankcard .list.recent .li { align-items: center; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); }
   .card .org { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .card .name { font-weight: 600; margin: 2px 0 8px; }
@@ -441,7 +443,29 @@ function MiniChart({ points, low, height = 70 }) {
   );
 }
 
-function BankCard({ a, m, settings, today }) {
+const RECENT_DAYS = 3;
+function RecentTx({ a, txs, today }) {
+  const since = addDays(today, -(RECENT_DAYS - 1));
+  const rows = (txs || []).filter((t) => t.account_id === a.id && t.posted >= since)
+    .sort((x, y) => (y.pending - x.pending) || y.posted.localeCompare(x.posted) || Math.abs(y.amount) - Math.abs(x.amount));
+  return (
+    <>
+      <div className="sub-h">Recent · last {RECENT_DAYS} days</div>
+      <div className="list recent">
+        {rows.length === 0 && <div className="muted" style={{ fontSize: 13 }}>No transactions in the last {RECENT_DAYS} days.</div>}
+        {rows.map((t) => (
+          <div className="li" key={t.id}>
+            <span className="when">{shortDate(t.posted)}{t.pending ? <div className="chip spent">pending</div> : null}</span>
+            <span className="what" title={t.description}>{t.description}</span>
+            <span className="amt"><Money v={t.amount} signed /></span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function BankCard({ a, m, settings, today, txs }) {
   const staleDays = a.balance_date ? diffDays(today, a.balance_date) : 99;
   const fut = m ? m.days.filter((d) => d.date >= today) : [];
   const in30 = fut[30]?.end ?? null;
@@ -455,6 +479,7 @@ function BankCard({ a, m, settings, today }) {
       <div className="bal"><Money v={a.balance} /></div>
       {a.available !== null && a.available !== a.balance && <div className="meta">Available {money(a.available)}</div>}
       <div className={"meta " + (staleDays > 2 ? "stale" : "")}>Bank data as of {a.balance_date ? shortDate(a.balance_date) : "—"}{staleDays > 2 ? " · stale" : ""}</div>
+      <RecentTx a={a} txs={txs} today={today} />
       {m && fut.length > 0 && (
         <>
           <div className="projrow">
@@ -604,7 +629,7 @@ function Overview({ data, settings, models, reload }) {
       <CardBoard key={acctTab} ids={list.map((a) => a.id)} layoutKey={"layout_" + acctTab} minWidth={acctTab === "debt" ? 300 : 380}
         prefs={data.prefs} settings={settings} onSaved={reload}
         render={(id) => { const a = accounts.find((x) => x.id === id); return acctTab !== "debt"
-          ? <BankCard a={a} m={models[a.id]} settings={settings} today={today} />
+          ? <BankCard a={a} m={models[a.id]} settings={settings} today={today} txs={data.txs} />
           : <DebtCard a={a} recurring={data.recurring} accounts={accounts} today={today} />; }} />
     </div>
   );
