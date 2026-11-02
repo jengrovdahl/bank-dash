@@ -81,6 +81,8 @@
   tr.today td { background: var(--income-soft); }
   tr.future td { color: var(--muted); }
   tr.future td.bal { color: var(--ink); }
+  tr.monthrow td { background: var(--panel2); font-weight: 600; font-family: "Fraunces", Georgia, serif; font-size: 15px; position: sticky; top: 33px; z-index: 1; }
+  tr.totalrow td { font-weight: 600; border-top: 2px solid var(--line); background: var(--panel); position: sticky; bottom: 0; }
   .tablewrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
   .chip { display: inline-block; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; margin: 1px 2px 1px 0; white-space: nowrap; }
   .chip.bills, .chip.bill { background: var(--bill-soft); color: var(--bill); }
@@ -592,7 +594,7 @@ function Overview({ data, settings, models, reload }) {
   return (
     <div className="grid" style={{ gap: 16 }}>
       {last && !last.ok && <div className="warnbox">Last sync failed {ago(last.ran_at)}: {last.message}</div>}
-      {last && last.ok && /warning/.test(last.message || "") && <div className="warnbox">{last.message}. A bank probably needs you to sign in again on SimpleFIN.</div>}
+      {last && last.ok && last.message && last.message !== "ok" && <div className="warnbox">Last sync note: {last.message}</div>}
       <nav className="tabs" style={{ marginBottom: 0 }}>
         {[["checking", `Checking · ${money(sum(groups.checking))}`], ["savings", `Savings · ${money(sum(groups.savings))}`], ["debt", `Loans & cards · ${money(sum(groups.debt))}`]].map(([k, l]) => (
           <button key={k} className={acctTab === k ? "on" : ""} onClick={() => setAcctTab(k)}>{l}</button>
@@ -681,9 +683,12 @@ function CalendarView({ data, models, settings, acctId, setAcctId }) {
 
 function Ledger({ data, models, acctId, setAcctId }) {
   const today = todayStr();
-  const [month, setMonth] = useState(today.slice(0, 7));
+  const [fromM, setFromM] = useState(today.slice(0, 7));
+  const [toM, setToM] = useState(today.slice(0, 7));
   const m = models[acctId];
-  const rows = (m?.days || []).filter((d) => d.date.startsWith(month));
+  const rows = (m?.days || []).filter((d) => d.date.slice(0, 7) >= fromM && d.date.slice(0, 7) <= toM);
+  const tot = rows.reduce((t, d) => ({ spent: t.spent + (d.spent || 0), bills: t.bills + (d.bills || 0), plus: t.plus + (d.plus || 0) }), { spent: 0, bills: 0, plus: 0 });
+  const monthLabel = (mm) => `${MON[Number(mm.slice(5)) - 1]} ${mm.slice(0, 4)}`;
   const notesFor = (d) => {
     const names = [...d.occ.filter((o) => d.actual ? o.paid : true).map((o) => o.rec.name), ...(d.actual ? d.projected.map((o) => o.rec.name + " (expected)") : []),...(d.actual ? d.txs.filter((t) => catOf(t) !== "spent" && !d.occ.some((o) => o.paid && o.paid.id === t.id)).map((t) => (t.description || "").split(" — ")[0].slice(0, 28)) : [])];
     return [...new Set(names)].join(", ");
@@ -695,16 +700,23 @@ function Ledger({ data, models, acctId, setAcctId }) {
     <div>
       <div className="toolbar">
         <AccountPicker accounts={data.accounts} value={acctId} onChange={setAcctId} />
-        <select value={month} onChange={(e) => setMonth(e.target.value)}>{months.map((mm) => <option key={mm} value={mm}>{MON[Number(mm.slice(5)) - 1]} {mm.slice(0, 4)}</option>)}</select>
+        <label className="muted" style={{ fontSize: 13 }}>From</label>
+        <select value={fromM} onChange={(e) => { setFromM(e.target.value); setToM(e.target.value); }}>{months.map((mm) => <option key={mm} value={mm}>{monthLabel(mm)}</option>)}</select>
+        <label className="muted" style={{ fontSize: 13 }}>To</label>
+        <select value={toM} onChange={(e) => setToM(e.target.value)}>{months.filter((mm) => mm >= fromM).map((mm) => <option key={mm} value={mm}>{monthLabel(mm)}</option>)}</select>
         <span className="spacer" />
-        <button className="btn small" onClick={() => downloadCSV(`ledger-${month}.csv`, exportRows)}>Export CSV</button>
+        <button className="btn small" onClick={() => downloadCSV(`ledger-${fromM}${toM !== fromM ? "-to-" + toM : ""}.csv`, exportRows)}>Export CSV</button>
       </div>
       <div className="tablewrap">
         <table>
           <thead><tr><th>Day</th><th>Date</th><th className="num">(−) spent</th><th className="num">(−) bills</th><th className="num">(+)</th><th className="num">Balance</th><th>Notes</th></tr></thead>
           <tbody>
-            {rows.map((d) => (
-              <tr key={d.date} className={d.date === today ? "today" : d.date > today ? "future" : ""}>
+            {rows.map((d, i) => (
+              <React.Fragment key={d.date}>
+              {toM !== fromM && (i === 0 || d.date.slice(0, 7) !== rows[i - 1].date.slice(0, 7)) && (
+                <tr className="monthrow"><td colSpan="7">{monthLabel(d.date.slice(0, 7))}</td></tr>
+              )}
+              <tr className={d.date === today ? "today" : d.date > today ? "future" : ""}>
                 <td>{DOWU[parse(d.date).getDay()]}</td>
                 <td className="num">{d.date.slice(5).replace("-", "/")}</td>
                 <td className="num">{d.spent ? (d.estSpent ? <span className="muted" title="typical daily spending">~{money(d.spent)}</span> : money(d.spent)) : ""}</td>
@@ -713,7 +725,18 @@ function Ledger({ data, models, acctId, setAcctId }) {
                 <td className="num bal">{d.noData ? <span className="muted">no data</span> : money(d.end)}</td>
                 <td style={{ fontSize: 13 }}>{notesFor(d)}</td>
               </tr>
+              </React.Fragment>
             ))}
+            {rows.length > 0 && (
+              <tr className="totalrow">
+                <td colSpan="2">Total{toM !== fromM ? `, ${monthLabel(fromM)} – ${monthLabel(toM)}` : ""}</td>
+                <td className="num">{money(tot.spent)}</td>
+                <td className="num">{money(tot.bills)}</td>
+                <td className="num">{money(tot.plus)}</td>
+                <td className="num">{money(rows[rows.length - 1].end)}</td>
+                <td style={{ fontSize: 13 }} className="muted">ending balance</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
