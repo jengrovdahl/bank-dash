@@ -45,6 +45,13 @@
   .btn:disabled { opacity: .55; cursor: default; }
   .grid { display: grid; gap: 12px; }
   .cards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .bigcards { grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); align-items: start; }
+  .bankcard .projrow { display: flex; gap: 18px; margin: 12px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .bankcard .projrow .kpi b { font-size: 17px; }
+  .sub-h { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 10px 0 2px; font-weight: 600; }
+  .bankcard .list .li { font-size: 14px; padding: 6px 0; }
+  .bankcard .list .when { width: 70px; font-size: 12.5px; }
+  .bankcard .list .after { width: 96px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); }
   .card .org { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .card .name { font-weight: 600; margin: 2px 0 8px; }
@@ -230,17 +237,37 @@ function occurrences(r, from, to) {
   return out;
 }
 
+const ordinal = (n) => { n = Math.round(Number(n)); if (!n) return ""; const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+
+// A bill linked to a loan account ends when that loan's balance is paid off.
+function effRec(r, accounts) {
+  if (!r.loan_account_id) return r;
+  const loan = accounts.find((a) => a.id === r.loan_account_id);
+  if (!loan || !r.amount) return r;
+  const B = Math.abs(loan.balance || 0);
+  if (B < 0.01) return { ...r, end_date: todayStr() };
+  const i = (Number(r.apr) || 0) / 1200;
+  let n;
+  if (i > 0) { if (i * B >= r.amount) return { ...r, end_date: null }; n = Math.ceil(-Math.log(1 - (i * B) / r.amount) / Math.log(1 + i)); }
+  else n = Math.ceil(B / r.amount);
+  const today = todayStr();
+  const occ = occurrences({ ...r, end_date: null }, addDays(today, 1), addDays(today, 366 * 40));
+  return { ...r, end_date: occ[Math.min(n, occ.length) - 1] || r.end_date };
+}
+
 function safeRe(p) { try { return p ? new RegExp(p, "i") : null; } catch { return null; } }
 const catOf = (t) => t.category_override || t.category || (t.amount > 0 ? "deposit" : "spent");
-const defaultPrimary = (accounts) => (accounts.find((a) => a.kind === "checking" && !a.hidden) || accounts[0])?.id || "";
+// Main account: the one saved in the database, else the checking account that receives the most deposits (your paycheck).
+let PRIMARY_PREF = "", PRIMARY_AUTO = "";
+const defaultPrimary = (accounts) => (PRIMARY_PREF && accounts.some((a) => a.id === PRIMARY_PREF) ? PRIMARY_PREF : "") || PRIMARY_AUTO || (accounts.find((a) => a.kind === "checking" && !a.hidden) || accounts[0])?.id || "";
 
 // Build a full model for one account: past days from transactions, future from recurring.
 function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
   const today = todayStr();
   if (!account) return { days: [], occ: [] };
-  const primary = settings.primaryAccount || defaultPrimary(accounts);
+  const primary = defaultPrimary(accounts);
   const acctTx = txs.filter((t) => t.account_id === account.id);
-  const recs = recurring.filter((r) => r.active && ((r.account_id || primary) === account.id));
+  const recs = recurring.filter((r) => r.active && ((r.account_id || primary) === account.id)).map((r) => effRec(r, accounts));
 
   // Mark scheduled items as already paid if a matching transaction shows up near the date.
   const occ = [];
@@ -252,7 +279,7 @@ function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
       let paid = null;
       if (d <= addDays(today, 5)) {
         paid = acctTx.find((t) => Math.sign(t.amount) === sign && Math.abs(diffDays(t.posted, d)) <= 5 &&
-          (re ? re.test(t.description || "") : true) && Math.abs(Math.abs(t.amount) - r.amount) <= Math.max(5, r.amount * 0.2)) || null;
+          (re ? re.test(t.description || "") : true) && Math.abs(Math.abs(t.amount) - r.amount) <= (r.loan_account_id ? Math.max(1, r.amount * 0.02) : Math.max(5, r.amount * 0.2))) || null;
       }
       occ.push({ date: d, rec: r, amount: sign * r.amount, paid });
     }
@@ -386,68 +413,54 @@ function LineChart({ points, low, height = 160 }) {
 }
 
 // ===================== screens =====================
-function Overview({ data, settings, models, setTab, refresh, refreshing, reload }) {
-  const { accounts, sync } = data;
-  const visible = accounts.filter((a) => !a.hidden);
-  const cash = visible.filter((a) => a.kind === "checking" || a.kind === "savings").reduce((s, a) => s + (a.balance || 0), 0);
-  const debt = visible.filter((a) => a.kind === "credit" || a.kind === "loan").reduce((s, a) => s + (a.balance || 0), 0);
-  const primary = accounts.find((a) => a.id === (settings.primaryAccount || defaultPrimary(accounts)));
-  const m = primary ? models[primary.id] : null;
-  const today = todayStr();
+function MiniChart({ points, low, height = 70 }) {
+  const ref = useRef(null);
+  const [w, setW] = useState(300);
+  useEffect(() => {
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  const vals = points.map((p) => p.v).filter((v) => v !== null);
+  if (!vals.length) return <div ref={ref} />;
+  const min = Math.min(...vals, low ?? Infinity), max = Math.max(...vals);
+  const X = (i) => (i / Math.max(1, points.length - 1)) * (w - 2) + 1;
+  const Y = (v) => 4 + (1 - (v - min) / (max - min || 1)) * (height - 8);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join("");
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      <svg width={w} height={height} role="img" aria-label="Projected balance, next 90 days">
+        {low !== undefined && low >= min && low <= max && <line x1="0" x2={w} y1={Y(low)} y2={Y(low)} stroke="var(--warn)" strokeDasharray="3 3" />}
+        <path d={d} fill="none" stroke="var(--accent)" strokeWidth="2" />
+      </svg>
+    </div>
+  );
+}
+
+function BankCard({ a, m, settings, today }) {
+  const staleDays = a.balance_date ? diffDays(today, a.balance_date) : 99;
   const fut = m ? m.days.filter((d) => d.date >= today) : [];
+  const in30 = fut[30]?.end ?? null;
   const next60 = fut.slice(0, 61);
   const lowest = next60.reduce((lo, d) => (d.end !== null && (lo === null || d.end < lo.end) ? d : lo), null);
-  const upcoming = fut.slice(0, 22).flatMap((d) => d.projected.map((o) => ({ ...o, on: d.date, after: d.end })));
-  const last = sync[0];
-
+  const upcoming = fut.slice(0, 31).flatMap((d) => d.projected.map((o) => ({ ...o, on: d.date, after: d.end })));
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <div className="row">
-        <div className="card"><div className="kpi">Cash across accounts<b>{money(cash)}</b></div></div>
-        <div className="card"><div className="kpi">Owed on cards &amp; loans<b className={debt < 0 ? "neg" : ""}>{money(debt)}</b></div></div>
-        <div className="card">
-          <div className="kpi">Lowest in next 60 days{primary ? ` · ${primary.nickname || primary.name}` : ""}
-            <b className={lowest && lowest.end < settings.lowBalance ? "neg" : ""}>{lowest ? money(lowest.end) : "—"}</b>
+    <div className="card bankcard">
+      <div className="org">{a.org}</div>
+      <div className="name">{a.nickname || a.name}</div>
+      <div className="bal"><Money v={a.balance} /></div>
+      {a.available !== null && a.available !== a.balance && <div className="meta">Available {money(a.available)}</div>}
+      <div className={"meta " + (staleDays > 2 ? "stale" : "")}>Bank data as of {a.balance_date ? shortDate(a.balance_date) : "—"}{staleDays > 2 ? " · stale" : ""}</div>
+      {m && fut.length > 0 && (
+        <>
+          <div className="projrow">
+            <div className="kpi">In 30 days<b>{money(in30)}</b></div>
+            <div className="kpi">Lowest, next 60 days<b className={lowest && lowest.end < settings.lowBalance ? "neg" : ""}>{lowest ? money(lowest.end) : "—"}</b>{lowest && <span className="muted" style={{ fontSize: 12 }}>{shortDate(lowest.date)}</span>}</div>
           </div>
-          {lowest && <div className="muted" style={{ fontSize: 13 }}>on {shortDate(lowest.date)}</div>}
-        </div>
-      </div>
-
-      {last && !last.ok && <div className="warnbox">Last sync failed {ago(last.ran_at)}: {last.message}</div>}
-      {last && last.ok && /warning/.test(last.message || "") && <div className="warnbox">{last.message}. A bank probably needs you to sign in again on SimpleFIN.</div>}
-
-      <div className="grid cards">
-        {visible.map((a) => {
-          const staleDays = a.balance_date ? diffDays(today, a.balance_date) : 99;
-          return (
-            <div className="card" key={a.id}>
-              <div className="org">{a.org}</div>
-              <div className="name">{a.nickname || a.name}</div>
-              <div className="bal"><Money v={a.balance} /></div>
-              {a.available !== null && a.available !== a.balance && <div className="meta">Available {money(a.available)}</div>}
-              <div className={"meta " + (staleDays > 2 ? "stale" : "")}>Bank data as of {a.balance_date ? shortDate(a.balance_date) : "—"}{staleDays > 2 ? " · stale" : ""}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      {m && (
-        <div className="card">
-          <div className="toolbar" style={{ marginBottom: 6 }}>
-            <h3 style={{ fontSize: 18 }}>Projected balance · {primary.nickname || primary.name}</h3>
-            <span className="spacer" />
-            <button className="btn small" onClick={() => setTab("calendar")}>Open calendar</button>
-          </div>
-          {m.avgSpend > 0 && <p className="muted" style={{ fontSize: 13, margin: "0 0 6px" }}>Includes scheduled bills and paychecks, plus your typical everyday spending of about {money(m.avgSpend)}/day.</p>}
-          <LineChart low={settings.lowBalance} points={fut.slice(0, 366).map((d) => ({ d: d.date, v: d.end }))} />
-        </div>
-      )}
-
-      <div className="row">
-        <div className="card">
-          <h3 style={{ fontSize: 18, marginBottom: 6 }}>Coming up · next 3 weeks</h3>
+          <MiniChart points={fut.slice(0, 91).map((d) => ({ d: d.date, v: d.end }))} low={settings.lowBalance} />
+          <div className="sub-h">Coming up · next 30 days</div>
           <div className="list">
-            {upcoming.length === 0 && <div className="muted">Nothing scheduled.</div>}
+            {upcoming.length === 0 && <div className="muted" style={{ fontSize: 13 }}>No bills or deposits scheduled for this account.</div>}
             {upcoming.map((o, i) => (
               <div className="li" key={i}>
                 <span className="when">{shortDate(o.on)}{o.date < today ? <div className="chip bill">late?</div> : null}</span>
@@ -457,16 +470,63 @@ function Overview({ data, settings, models, setTab, refresh, refreshing, reload 
               </div>
             ))}
           </div>
-        </div>
-        <div className="card">
-          <h3 style={{ fontSize: 18, marginBottom: 6 }}>Sync</h3>
-          <p className="muted" style={{ marginTop: 0 }}>Updates nightly around 3 AM. Last run: <b>{last ? ago(last.ran_at) : "not yet"}</b>{last ? ` · ${last.new_transactions} new` : ""}.</p>
-          <div className="toolbar">
-            <button className="btn primary" onClick={refresh} disabled={refreshing}>{refreshing ? refreshing : "Refresh now"}</button>
-            <button className="btn" onClick={reload}>Reload page data</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DebtCard({ a, recurring, accounts, today }) {
+  const staleDays = a.balance_date ? diffDays(today, a.balance_date) : 99;
+  const bills = recurring.filter((r) => r.active && r.loan_account_id === a.id).map((r) => effRec(r, accounts));
+  return (
+    <div className="card">
+      <div className="org">{a.org}</div>
+      <div className="name">{a.nickname || a.name}</div>
+      <div className="bal"><Money v={a.balance} /></div>
+      <div className={"meta " + (staleDays > 2 ? "stale" : "")}>Bank data as of {a.balance_date ? shortDate(a.balance_date) : "—"}{staleDays > 2 ? " · stale" : ""}</div>
+      {bills.map((r) => {
+        const next = occurrences(r, today, addDays(today, 400))[0];
+        return (
+          <div key={r.id} className="note" style={{ marginTop: 10, fontSize: 13 }}>
+            <b>{money(r.amount)}</b> on the {ordinal(r.day)}{next ? ` · next ${shortDate(next)}` : ""}<br />
+            {r.end_date ? <>Paid off around <b>{MON[parse(r.end_date).getMonth()]} {parse(r.end_date).getFullYear()}</b>{r.apr ? ` at ${r.apr}% APR` : " (estimate without interest; add the APR on Bills & Income for an exact date)"}</> : "Payoff date unknown"}
           </div>
-          <p className="muted" style={{ fontSize: 13 }}>Refresh now pulls the newest data SimpleFIN has. SimpleFIN itself checks each bank about once a day, so a purchase from an hour ago may not show yet.</p>
-        </div>
+        );
+      })}
+      {bills.length === 0 && <div className="meta">No payment linked yet. Add one on Bills &amp; Income.</div>}
+    </div>
+  );
+}
+
+function Overview({ data, settings, models }) {
+  const { accounts, sync } = data;
+  const visible = accounts.filter((a) => !a.hidden);
+  const cash = visible.filter((a) => a.kind === "checking" || a.kind === "savings").reduce((s, a) => s + (a.balance || 0), 0);
+  const debt = visible.filter((a) => a.kind === "credit" || a.kind === "loan").reduce((s, a) => s + (a.balance || 0), 0);
+  const today = todayStr();
+  const last = sync[0];
+  const [acctTab, setAcctTab] = useState("bank");
+  const mainId = defaultPrimary(accounts);
+  const kindOrder = { checking: 0, savings: 1, other: 2 };
+  const bankAccts = visible.filter((a) => a.kind !== "credit" && a.kind !== "loan").sort((x, y) => (y.id === mainId) - (x.id === mainId) || (kindOrder[x.kind] ?? 3) - (kindOrder[y.kind] ?? 3));
+  const debtAccts = visible.filter((a) => a.kind === "credit" || a.kind === "loan");
+  const list = acctTab === "bank" ? bankAccts : debtAccts;
+
+  return (
+    <div className="grid" style={{ gap: 16 }}>
+      {last && !last.ok && <div className="warnbox">Last sync failed {ago(last.ran_at)}: {last.message}</div>}
+      {last && last.ok && /warning/.test(last.message || "") && <div className="warnbox">{last.message}. A bank probably needs you to sign in again on SimpleFIN.</div>}
+      <nav className="tabs" style={{ marginBottom: 0 }}>
+        {[["bank", `Bank accounts · ${money(cash)}`], ["debt", `Loans & credit cards · ${money(debt)}`]].map(([k, l]) => (
+          <button key={k} className={acctTab === k ? "on" : ""} onClick={() => setAcctTab(k)}>{l}</button>
+        ))}
+      </nav>
+      {list.length === 0 && <div className="muted">No accounts here yet. Add them in SimpleFIN Bridge and they'll show up after the next sync.</div>}
+      <div className={"grid " + (acctTab === "bank" ? "bigcards" : "cards")}>
+        {list.map((a) => acctTab === "bank"
+          ? <BankCard key={a.id} a={a} m={models[a.id]} settings={settings} today={today} />
+          : <DebtCard key={a.id} a={a} recurring={data.recurring} accounts={accounts} today={today} />)}
       </div>
     </div>
   );
@@ -645,23 +705,37 @@ function Transactions({ data, settings, onChanged, toast }) {
 }
 
 const FREQS = ["monthly", "biweekly", "weekly", "semimonthly", "quarterly", "yearly", "once"];
-const blankRec = { name: "", kind: "bill", amount: "", frequency: "monthly", day: 1, anchor_date: "", end_date: "", match: "", account_id: "", active: 1, notes: "" };
+const blankRec = { name: "", kind: "bill", amount: "", frequency: "monthly", day: 1, anchor_date: "", end_date: "", match: "", account_id: "", active: 1, notes: "", loan_account_id: "", apr: "" };
 function Recurring({ data, settings, onChanged, toast }) {
   const [edit, setEdit] = useState(null);
   const acctName = (id) => { if (!id) return "Main account"; const a = data.accounts.find((x) => x.id === id); return a ? a.nickname || a.name : "?"; };
   const today = todayStr();
-  const nextOf = (r) => occurrences(r, today, addDays(today, 400))[0];
+  const nextOf = (r) => occurrences(effRec(r, data.accounts), today, addDays(today, 400))[0];
   const save = async () => {
     const r = edit;
     if (!r.name || !Number(r.amount)) return toast("Name and amount are required");
     if (["weekly", "biweekly", "yearly", "once"].includes(r.frequency) && !r.anchor_date) return toast("Pick a start date for that frequency");
     if (r.match && !safeRe(r.match)) return toast("Match text isn't valid");
-    const args = [r.name, r.kind, Number(r.amount), r.account_id || null, r.frequency, r.day ? Number(r.day) : null, r.anchor_date || null, r.end_date || null, r.match || null, r.active ? 1 : 0, r.notes || null];
+    const args = [r.name, r.kind, Number(r.amount), r.account_id || null, r.frequency, r.day ? Math.round(Number(r.day)) : null, r.anchor_date || null, r.loan_account_id ? null : (r.end_date || null), r.match || null, r.active ? 1 : 0, r.notes || null, r.loan_account_id || null, r.apr === "" || r.apr === null ? null : Number(r.apr)];
     try {
-      if (r.id) await q(settings, "UPDATE recurring SET name=?, kind=?, amount=?, account_id=?, frequency=?, day=?, anchor_date=?, end_date=?, match=?, active=?, notes=? WHERE id=?", [...args, r.id]);
-      else await q(settings, "INSERT INTO recurring (name, kind, amount, account_id, frequency, day, anchor_date, end_date, match, active, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?)", args);
+      if (r.id) await q(settings, "UPDATE recurring SET name=?, kind=?, amount=?, account_id=?, frequency=?, day=?, anchor_date=?, end_date=?, match=?, active=?, notes=?, loan_account_id=?, apr=? WHERE id=?", [...args, r.id]);
+      else await q(settings, "INSERT INTO recurring (name, kind, amount, account_id, frequency, day, anchor_date, end_date, match, active, notes, loan_account_id, apr) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", args);
       setEdit(null); onChanged(); toast("Saved");
     } catch (e) { toast(e.message); }
+  };
+  const bankAccts = data.accounts.filter((a) => a.kind === "checking" || a.kind === "savings");
+  const mainId = defaultPrimary(data.accounts);
+  const mainAcct = data.accounts.find((a) => a.id === mainId);
+  const acctLabel = (a) => `${a.org} · ${a.nickname || a.name}`;
+  const AcctSelect = ({ value, onChange }) => (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)} style={{ maxWidth: 260 }}>
+      <option value="">Main account{mainAcct ? ` (${mainAcct.nickname || mainAcct.name})` : ""}</option>
+      <optgroup label="Checking">{bankAccts.filter((a) => a.kind === "checking").map((a) => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}</optgroup>
+      <optgroup label="Savings">{bankAccts.filter((a) => a.kind === "savings").map((a) => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}</optgroup>
+    </select>
+  );
+  const setAccount = async (r, id) => {
+    try { await q(settings, "UPDATE recurring SET account_id = ? WHERE id = ?", [id || null, r.id]); onChanged(); toast("Account updated"); } catch (e) { toast(e.message); }
   };
   const remove = async (r) => {
     if (!confirm(`Remove "${r.name}" from your schedule?`)) return;
@@ -681,7 +755,7 @@ function Recurring({ data, settings, onChanged, toast }) {
       </div>
       <div className="tablewrap">
         <table>
-          <thead><tr><th>Name</th><th className="num">Amount</th><th>When</th><th>Next</th><th>Ends</th><th>Account</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th className="num">Amount</th><th>When</th><th>Next</th><th>Ends</th><th>Posts to</th><th></th></tr></thead>
           <tbody>
             {list.map((r) => (
               <tr key={r.id} style={{ opacity: r.active ? 1 : .5 }}>
@@ -689,9 +763,9 @@ function Recurring({ data, settings, onChanged, toast }) {
                 <td className="num">{money(r.amount)}</td>
                 <td>{r.frequency}{["monthly", "semimonthly", "quarterly"].includes(r.frequency) ? ` · day ${r.day}` : r.anchor_date ? ` · from ${r.anchor_date}` : ""}</td>
                 <td className="num">{nextOf(r) ? shortDate(nextOf(r)) : "—"}</td>
-                <td className="num">{r.end_date || ""}</td>
-                <td style={{ fontSize: 13 }}>{acctName(r.account_id)}</td>
-                <td style={{ whiteSpace: "nowrap" }}><button className="btn small" onClick={() => setEdit({ ...blankRec, ...r, anchor_date: r.anchor_date || "", end_date: r.end_date || "", match: r.match || "", account_id: r.account_id || "", notes: r.notes || "" })}>Edit</button> <button className="btn small" onClick={() => remove(r)}>Remove</button></td>
+                <td className="num">{(() => { const e = effRec(r, data.accounts); return e.end_date ? <span title={r.loan_account_id ? "From the loan balance" : ""}>{r.loan_account_id ? "~" : ""}{e.end_date}</span> : ""; })()}</td>
+                <td><AcctSelect value={r.account_id} onChange={(id) => setAccount(r, id)} /></td>
+                <td style={{ whiteSpace: "nowrap" }}><button className="btn small" onClick={() => setEdit({ ...blankRec, ...r, anchor_date: r.anchor_date || "", end_date: r.end_date || "", match: r.match || "", account_id: r.account_id || "", notes: r.notes || "", loan_account_id: r.loan_account_id || "", apr: r.apr ?? "" })}>Edit</button> <button className="btn small" onClick={() => remove(r)}>Remove</button></td>
               </tr>
             ))}
           </tbody>
@@ -708,8 +782,10 @@ function Recurring({ data, settings, onChanged, toast }) {
               <label className="f">How often<select value={edit.frequency} onChange={(e) => setEdit({ ...edit, frequency: e.target.value })}>{FREQS.map((f) => <option key={f}>{f}</option>)}</select></label>
               {["monthly", "semimonthly", "quarterly"].includes(edit.frequency) && <label className="f">Day of month<input type="number" min="1" max="31" value={edit.day || ""} onChange={(e) => setEdit({ ...edit, day: e.target.value })} /></label>}
               <label className="f">{["weekly", "biweekly", "yearly", "once"].includes(edit.frequency) ? "Date of one payment (required)" : "Starts on (optional)"}<input type="date" value={edit.anchor_date} onChange={(e) => setEdit({ ...edit, anchor_date: e.target.value })} /></label>
-              <label className="f">Last payment / payoff date (optional)<input type="date" value={edit.end_date} onChange={(e) => setEdit({ ...edit, end_date: e.target.value })} /></label>
-              <label className="f">Account<select value={edit.account_id} onChange={(e) => setEdit({ ...edit, account_id: e.target.value })}><option value="">Main account</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name}</option>)}</select></label>
+              {edit.kind === "bill" && <label className="f">Pays down a loan (end date is worked out from the loan balance)<select value={edit.loan_account_id} onChange={(e) => setEdit({ ...edit, loan_account_id: e.target.value })}><option value="">No</option>{data.accounts.filter((a) => a.kind === "loan" || a.kind === "credit").map((a) => <option key={a.id} value={a.id}>{a.org} · {a.nickname || a.name} ({money(a.balance)})</option>)}</select></label>}
+              {edit.loan_account_id ? <label className="f">Interest rate, APR % (optional, makes the payoff date exact)<input type="number" step="0.01" value={edit.apr} onChange={(e) => setEdit({ ...edit, apr: e.target.value })} /></label>
+                : <label className="f">Last payment / payoff date (optional)<input type="date" value={edit.end_date} onChange={(e) => setEdit({ ...edit, end_date: e.target.value })} /></label>}
+              <label className="f">{edit.kind === "income" ? "Deposited into" : "Comes out of"}<AcctSelect value={edit.account_id} onChange={(id) => setEdit({ ...edit, account_id: id })} /></label>
               <label className="f">Words that appear on the bank line (helps match it, e.g. <span className="mono">verizon</span> or <span className="mono">amex|american express</span>)<input value={edit.match} onChange={(e) => setEdit({ ...edit, match: e.target.value })} /></label>
               <label className="f">Notes<input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
               <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={!!edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked ? 1 : 0 })} /> Active</label>
@@ -743,7 +819,7 @@ function Settings({ settings, setSettings, data, onChanged, toast }) {
         </div>
         <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}><input type="checkbox" checked={s.projectSpending !== false} onChange={(e) => setS({ ...s, projectSpending: e.target.checked })} /> Include typical everyday spending in projections</label>
         <label className="f">Main account (where bills come out unless you say otherwise)
-          <select value={s.primaryAccount} onChange={(e) => setS({ ...s, primaryAccount: e.target.value })}><option value="">First checking account</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name} · {a.org}</option>)}</select>
+          <select value={PRIMARY_PREF} onChange={async (e) => { try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES ('primary_account', ?)", [e.target.value]); onChanged(); toast("Main account saved for all your devices"); } catch (err) { toast(err.message); } }}><option value="">Automatic (checking account your paycheck goes into)</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name} · {a.org}</option>)}</select>
         </label>
         <div><button className="btn primary" onClick={saveConn}>Save settings</button></div>
       </div>
@@ -809,12 +885,18 @@ function App() {
     setLoading(true); setErr("");
     try {
       const since = addDays(todayStr(), -400);
+      if (!window.__migrated) { window.__migrated = true; for (const sql of ["ALTER TABLE recurring ADD COLUMN loan_account_id TEXT", "ALTER TABLE recurring ADD COLUMN apr REAL"]) { try { await q(settings, sql); } catch {} } }
+      const prefs = await q(settings, "SELECT key, value FROM settings").catch(() => []);
+      PRIMARY_PREF = (prefs.find((r) => r.key === "primary_account") || {}).value || "";
       const [accounts, txs, recurring, sync] = await tursoBatch(settings, [
         ["SELECT * FROM accounts ORDER BY sort, org, name"],
         ["SELECT id, account_id, posted, amount, description, pending, category, category_override FROM transactions WHERE posted >= ?", [since]],
         ["SELECT * FROM recurring ORDER BY kind DESC, day"],
         ["SELECT * FROM sync_log ORDER BY id DESC LIMIT 15"],
       ]);
+      const dep = {}; const cutoff = addDays(todayStr(), -60);
+      for (const t of txs) if (t.amount > 0 && t.posted >= cutoff) dep[t.account_id] = (dep[t.account_id] || 0) + t.amount;
+      PRIMARY_AUTO = accounts.filter((a) => a.kind === "checking" && !a.hidden).sort((a, b) => (dep[b.id] || 0) - (dep[a.id] || 0))[0]?.id || "";
       setData({ accounts, txs, recurring, sync });
     } catch (e) {
       if (/no such table/i.test(e.message)) setErr("first-sync");
@@ -823,7 +905,7 @@ function App() {
   }, [settings]);
   useEffect(() => { load(); }, [load]);
 
-  const primaryId = settings.primaryAccount || defaultPrimary(data?.accounts || []);
+  const primaryId = defaultPrimary(data?.accounts || []);
   useEffect(() => { if (!acctId && primaryId) setAcctId(primaryId); }, [primaryId, acctId]);
 
   const models = useMemo(() => {
@@ -872,7 +954,7 @@ function App() {
       {err && err !== "first-sync" && <div className="warnbox">{err} <button className="btn small" onClick={() => setTab("settings")}>Settings</button></div>}
 
       {tab === "settings" && <Settings settings={settings} setSettings={setSettings} data={data || { accounts: [], sync: [] }} onChanged={load} toast={toast} />}
-      {data && tab === "overview" && <Overview data={data} settings={settings} models={models} setTab={setTab} refresh={refresh} refreshing={refreshing} reload={load} />}
+      {data && tab === "overview" && <Overview data={data} settings={settings} models={models} />}
       {data && tab === "calendar" && <CalendarView data={data} models={models} settings={settings} acctId={acctId} setAcctId={setAcctId} />}
       {data && tab === "ledger" && <Ledger data={data} models={models} acctId={acctId} setAcctId={setAcctId} />}
       {data && tab === "transactions" && <Transactions data={data} settings={settings} onChanged={load} toast={toast} />}
