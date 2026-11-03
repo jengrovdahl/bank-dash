@@ -62,8 +62,13 @@
   .bankcard .list .li { font-size: 14px; padding: 6px 0; }
   .bankcard .list .when { width: 70px; font-size: 12.5px; }
   .bankcard .list .after { width: 96px; }
-  .bankcard .list.recent .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .bankcard .list.recent .li { align-items: center; }
+  .bankcard .list .what { min-width: 0; overflow-wrap: anywhere; }
+  .board-col { position: relative; }
+  .col-resizer { position: absolute; top: 0; bottom: 0; right: -11px; width: 8px; cursor: col-resize; border-radius: 4px; z-index: 2; touch-action: none; }
+  .col-resizer:hover, .col-resizer.active { background: var(--accent); opacity: .35; }
+  .colpick { display: inline-flex; gap: 4px; align-items: center; margin-left: 10px; }
+  .colpick button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 1px 8px; font-size: 12px; cursor: pointer; color: inherit; }
+  .colpick button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); }
   .card .org { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .card .name { font-weight: 600; margin: 2px 0 8px; }
@@ -531,27 +536,63 @@ function DebtCard({ a, recurring, accounts, today }) {
 // (a wide laptop and a narrow one can each have their own), in the database so it follows you.
 function CardBoard({ ids, render, layoutKey, prefs, settings, onSaved, minWidth = 380 }) {
   const ref = useRef(null);
-  const [ncols, setNcols] = useState(() => Math.max(1, Math.floor((Math.min(window.innerWidth, 1200) - 32 + 14) / (minWidth + 14))));
+  const boardRef = useRef(null);
+  const [autoCols, setAutoCols] = useState(() => Math.max(1, Math.floor((Math.min(window.innerWidth, 1200) - 32 + 14) / (minWidth + 14))));
   const [dragId, setDragId] = useState(null);
   const [over, setOver] = useState(null);
   const [local, setLocal] = useState(null);
+  const [liveW, setLiveW] = useState(null);
+  const [resizing, setResizing] = useState(null);
+  const [maxCols, setMaxCols] = useState(3);
   useEffect(() => {
-    const ro = new ResizeObserver(([e]) => setNcols(Math.max(1, Math.floor((e.contentRect.width + 14) / (minWidth + 14)))));
+    const ro = new ResizeObserver(([e]) => {
+      const w = e.contentRect.width;
+      setAutoCols(Math.max(1, Math.floor((w + 14) / (minWidth + 14))));
+      setMaxCols(Math.max(1, Math.min(4, Math.floor((w + 14) / (260 + 14)))));
+    });
     if (ref.current) ro.observe(ref.current);
     return () => ro.disconnect();
   }, [minWidth]);
   let saved = {};
   try { saved = JSON.parse(prefs?.[layoutKey] || "{}"); } catch {}
-  const stored = local?.[ncols] || saved[ncols];
+  const merged = { ...saved, ...(local || {}) };
+  // Column count: your pick (if it still fits this screen), otherwise automatic.
+  const ncols = merged.ncols && merged.ncols <= maxCols ? merged.ncols : autoCols;
+  const stored = merged[ncols];
+  const savedW = merged.w?.[ncols];
+  const widths = liveW || (Array.isArray(savedW) && savedW.length === ncols ? savedW : Array(ncols).fill(1));
   // Build columns: stored order first, then any new accounts on the shortest column.
   const cols = Array.from({ length: ncols }, (_, i) => (stored?.[i] || []).filter((id) => ids.includes(id)));
   const placed = new Set(cols.flat());
   ids.filter((id) => !placed.has(id)).forEach((id) => { const c = cols.reduce((m, col, i) => (col.length < cols[m].length ? i : m), 0); cols[c].push(id); });
 
-  const save = async (next) => {
-    const all = { ...saved, ...(local || {}), [ncols]: next };
+  const persist = async (all) => {
     setLocal(all);
     try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [layoutKey, JSON.stringify(all)]); onSaved && onSaved(); } catch {}
+  };
+  const save = (next) => persist({ ...merged, [ncols]: next });
+  const pickCols = (n) => persist({ ...merged, ncols: n === "auto" ? undefined : n });
+  // Drag the bar between two columns to widen one and narrow the other.
+  const startResize = (i, e) => {
+    e.preventDefault();
+    const total = widths.reduce((a, b) => a + b, 0);
+    const px = (boardRef.current?.clientWidth || 1) - 14 * (ncols - 1);
+    const perFr = px / total, x0 = e.clientX, w0 = widths.slice();
+    const minFr = Math.min(w0[i] + w0[i + 1] - 0.01, 240 / perFr);
+    let cur = w0;
+    setResizing(i);
+    const move = (ev) => {
+      const d = (ev.clientX - x0) / perFr;
+      const a = Math.max(minFr, Math.min(w0[i] + w0[i + 1] - minFr, w0[i] + d));
+      cur = w0.slice(); cur[i] = a; cur[i + 1] = w0[i] + w0[i + 1] - a;
+      setLiveW(cur);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      setResizing(null); setLiveW(null);
+      persist({ ...merged, w: { ...(merged.w || {}), [ncols]: cur.map((v) => Math.round(v * 100) / 100) } });
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const drop = (colIdx, beforeId) => {
     if (!dragId) return;
@@ -562,17 +603,20 @@ function CardBoard({ ids, render, layoutKey, prefs, settings, onSaved, minWidth 
     setDragId(null); setOver(null);
     save(next);
   };
-  const reset = async () => {
-    const all = { ...saved, ...(local || {}) }; delete all[ncols];
-    setLocal(all);
-    try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", [layoutKey, JSON.stringify(all)]); onSaved && onSaved(); } catch {}
+  const reset = () => {
+    const all = { ...merged }; delete all[ncols];
+    if (all.w) { all.w = { ...all.w }; delete all.w[ncols]; }
+    delete all.ncols;
+    persist(all);
   };
   const canDrag = ncols > 1;
+  const customized = stored || savedW || merged.ncols;
   return (
     <div ref={ref}>
-      <div className="board" style={{ gridTemplateColumns: `repeat(${ncols}, minmax(0, 1fr))` }}>
+      <div ref={boardRef} className="board" style={{ gridTemplateColumns: widths.map((w) => `minmax(0, ${w}fr)`).join(" ") }}>
         {cols.map((col, ci) => (
           <div key={ci} className="board-col">
+            {ci < ncols - 1 && <div className={"col-resizer" + (resizing === ci ? " active" : "")} title="Drag to resize" onPointerDown={(e) => startResize(ci, e)} />}
             {col.map((id) => (
               <div key={id} className={"board-item" + (dragId === id ? " dragging" : "") + (over === id ? " over" : "")}
                 draggable={canDrag}
@@ -593,7 +637,14 @@ function CardBoard({ ids, render, layoutKey, prefs, settings, onSaved, minWidth 
           </div>
         ))}
       </div>
-      {canDrag && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Drag cards by their top to rearrange. {stored ? <button className="linkbtn" onClick={reset}>Reset layout</button> : null}</div>}
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        {canDrag ? "Drag cards to rearrange; drag the gap between columns to resize. " : ""}
+        {maxCols > 1 && <span className="colpick">Columns:
+          <button className={!merged.ncols ? "on" : ""} onClick={() => pickCols("auto")}>Auto</button>
+          {Array.from({ length: maxCols }, (_, i) => i + 1).map((n) => <button key={n} className={merged.ncols === n && n <= maxCols ? "on" : ""} onClick={() => pickCols(n)}>{n}</button>)}
+        </span>}
+        {customized ? <> · <button className="linkbtn" onClick={reset}>Reset layout</button></> : null}
+      </div>
     </div>
   );
 }
