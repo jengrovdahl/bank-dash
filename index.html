@@ -281,7 +281,9 @@ let PRIMARY_PREF = "", PRIMARY_AUTO = "", GH_SHARED = "";
 const defaultPrimary = (accounts) => (PRIMARY_PREF && accounts.some((a) => a.id === PRIMARY_PREF) ? PRIMARY_PREF : "") || PRIMARY_AUTO || (accounts.find((a) => a.kind === "checking" && !a.hidden) || accounts[0])?.id || "";
 
 // Build a full model for one account: past days from transactions, future from recurring.
-function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
+// One-off changes to a single payment: skip it, or use the real amount for that one.
+const ovKey = (recId, date) => recId + "|" + date;
+function buildModel({ account, accounts, txs, recurring, overrides = {}, settings, from, to }) {
   const today = todayStr();
   if (!account) return { days: [], occ: [] };
   const primary = defaultPrimary(accounts);
@@ -294,13 +296,16 @@ function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
   for (const r of recs) {
     const re = safeRe(r.match);
     for (const d of occurrences(r, lookFrom, to)) {
+      const ov = overrides[ovKey(r.id, d)];
+      if (ov && ov.skip) continue;
+      const amt = ov && ov.amount != null ? Number(ov.amount) : r.amount;
       const sign = r.kind === "income" ? 1 : -1;
       let paid = null;
       if (d <= addDays(today, 5)) {
         paid = acctTx.find((t) => Math.sign(t.amount) === sign && Math.abs(diffDays(t.posted, d)) <= 5 &&
-          (re ? re.test(t.description || "") : true) && Math.abs(Math.abs(t.amount) - r.amount) <= (r.loan_account_id ? Math.max(1, r.amount * 0.02) : Math.max(5, r.amount * 0.2))) || null;
+          (re ? re.test(t.description || "") : true) && Math.abs(Math.abs(t.amount) - amt) <= (r.loan_account_id ? Math.max(1, amt * 0.02) : Math.max(5, amt * 0.2))) || null;
       }
-      occ.push({ date: d, rec: r, amount: sign * r.amount, paid });
+      occ.push({ date: d, rec: r, amount: sign * amt, paid, actual: !!(ov && ov.amount != null) });
     }
   }
   // Unpaid items from the last 5 days are treated as still coming (bank may not have posted yet).
@@ -349,11 +354,8 @@ function buildModel({ account, accounts, txs, recurring, settings, from, to }) {
       occ: occByDay[p.date] || [], projected: projectedToday,
     });
   }
-  // Typical everyday spending (card swipes, not scheduled bills), averaged over recent history.
-  const histDays = Math.min(60, diffDays(today, earliest));
-  const spentRecent = acctTx.filter((t) => t.posted > addDays(today, -histDays) && t.posted <= today && t.amount < 0 && catOf(t) === "spent")
-    .reduce((a, t) => a - t.amount, 0);
-  const avgSpend = settings.projectSpending !== false && histDays >= 14 ? spentRecent / histDays : 0;
+  // Projections use only the recurring bills and income on the Bills & Income page — no estimated spending.
+  const avgSpend = 0;
 
   // future
   let fb = days.length ? days[days.length - 1].end ?? bal : bal;
@@ -497,7 +499,7 @@ function BankCard({ a, m, settings, today, txs }) {
             {upcoming.map((o, i) => (
               <div className="li" key={i}>
                 <span className="when">{shortDate(o.on)}{o.date < today ? <div className="chip bill">late?</div> : null}</span>
-                <span className="what">{o.rec.name}</span>
+                <span className="what">{o.rec.name}{o.actual ? <> <span className="chip income" title="Real amount for this payment">actual</span></> : null}</span>
                 <span className="amt"><Money v={o.amount} signed /></span>
                 <span className="after num">→ {money(o.after)}</span>
               </div>
@@ -885,7 +887,19 @@ function Recurring({ data, settings, onChanged, toast }) {
   const [edit, setEdit] = useState(null);
   const acctName = (id) => { if (!id) return "Main account"; const a = data.accounts.find((x) => x.id === id); return a ? a.nickname || a.name : "?"; };
   const today = todayStr();
-  const nextOf = (r) => occurrences(effRec(r, data.accounts), today, addDays(today, 400))[0];
+  const ovs = data.overrides || {};
+  const nextOf = (r) => occurrences(effRec(r, data.accounts), today, addDays(today, 400)).find((d) => !ovs[ovKey(r.id, d)]?.skip);
+  const changeCount = (r) => Object.values(ovs).filter((o) => o.rec_id === r.id && o.date >= today);
+  // Save a one-time change to a single payment (or clear it when nothing is changed).
+  const setOverride = async (r, date, patch) => {
+    const cur = ovs[ovKey(r.id, date)] || {};
+    const next = { skip: cur.skip ? 1 : 0, amount: cur.amount ?? null, ...patch };
+    try {
+      if (!next.skip && (next.amount === null || next.amount === "" || Number(next.amount) === r.amount)) await q(settings, "DELETE FROM rec_overrides WHERE rec_id = ? AND date = ?", [r.id, date]);
+      else await q(settings, "INSERT OR REPLACE INTO rec_overrides (rec_id, date, skip, amount, source) VALUES (?, ?, ?, ?, 'manual')", [r.id, date, next.skip ? 1 : 0, next.amount === null || next.amount === "" ? null : Number(next.amount)]);
+      onChanged();
+    } catch (e) { toast(e.message); }
+  };
   const save = async () => {
     const r = edit;
     if (!r.name || !Number(r.amount)) return toast("Name and amount are required");
@@ -937,7 +951,7 @@ function Recurring({ data, settings, onChanged, toast }) {
                 <td><span className={"chip " + (r.kind === "income" ? "income" : "bill")}>{r.kind}</span> {r.name}</td>
                 <td className="num">{money(r.amount)}</td>
                 <td>{r.frequency}{["monthly", "semimonthly", "quarterly"].includes(r.frequency) ? ` · day ${r.day}` : r.anchor_date ? ` · from ${r.anchor_date}` : ""}</td>
-                <td className="num">{nextOf(r) ? shortDate(nextOf(r)) : "—"}</td>
+                <td className="num">{nextOf(r) ? shortDate(nextOf(r)) : "—"}{(() => { const c = changeCount(r); const sk = c.filter((o) => o.skip).length, ac = c.filter((o) => !o.skip && o.amount != null).length; return <>{sk ? <div className="chip bill">{sk} skipped</div> : null}{ac ? <div className="chip income">actual set</div> : null}</>; })()}</td>
                 <td className="num">{(() => { const e = effRec(r, data.accounts); return e.end_date ? <span title={r.loan_account_id ? "From the loan balance" : ""}>{r.loan_account_id ? "~" : ""}{e.end_date}</span> : ""; })()}</td>
                 <td><AcctSelect value={r.account_id} onChange={(id) => setAccount(r, id)} /></td>
                 <td style={{ whiteSpace: "nowrap" }}><button className="btn small" onClick={() => setEdit({ ...blankRec, ...r, anchor_date: r.anchor_date || "", end_date: r.end_date || "", match: r.match || "", account_id: r.account_id || "", notes: r.notes || "", loan_account_id: r.loan_account_id || "", apr: r.apr ?? "" })}>Edit</button> <button className="btn small" onClick={() => remove(r)}>Remove</button></td>
@@ -965,6 +979,29 @@ function Recurring({ data, settings, onChanged, toast }) {
               <label className="f">Notes<input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} /></label>
               <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={!!edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked ? 1 : 0 })} /> Active</label>
               <div className="toolbar"><button className="btn primary" onClick={save}>Save</button><button className="btn" onClick={() => setEdit(null)}>Cancel</button></div>
+              {edit.id && (() => {
+                const r = data.recurring.find((x) => x.id === edit.id) || edit;
+                const dates = occurrences(effRec(r, data.accounts), addDays(today, -5), addDays(today, 400)).slice(0, 8);
+                return (
+                  <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                    <div className="sub-h" style={{ marginTop: 0 }}>Upcoming payments</div>
+                    <p className="muted" style={{ fontSize: 12.5, margin: "2px 0 8px" }}>Change just one payment: tick <b>Skip</b> to leave it out, or type the real amount for that one. Every other month keeps using {money(r.amount)}. Saves as you go.</p>
+                    {dates.length === 0 && <div className="muted" style={{ fontSize: 13 }}>No upcoming payments.</div>}
+                    {dates.map((d) => {
+                      const o = ovs[ovKey(r.id, d)] || {};
+                      return (
+                        <div key={d} style={{ display: "flex", gap: 10, alignItems: "center", padding: "5px 0", borderBottom: "1px solid var(--line)", opacity: o.skip ? .55 : 1 }}>
+                          <span style={{ width: 92, fontSize: 13 }}>{shortDate(d)}</span>
+                          <input type="number" step="0.01" placeholder={String(r.amount)} defaultValue={o.amount ?? ""} disabled={!!o.skip} style={{ width: 120 }} key={d + "|" + (o.amount ?? "")}
+                            onBlur={(e) => { const v = e.target.value; if ((v === "" ? null : Number(v)) !== (o.amount ?? null)) setOverride(r, d, { amount: v === "" ? null : Number(v) }); }} />
+                          <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 13 }}><input type="checkbox" checked={!!o.skip} onChange={(e) => setOverride(r, d, { skip: e.target.checked ? 1 : 0 })} /> Skip</label>
+                          {o.source && o.source !== "manual" ? <span className="chip income" title={o.note || ""}>from email</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -997,7 +1034,6 @@ function Settings({ settings, setSettings, data, onChanged, toast }) {
           <label className="f">Warn me when balance drops under<input type="number" value={s.lowBalance} onChange={(e) => setS({ ...s, lowBalance: Number(e.target.value) })} /></label>
           <label className="f">Project this many months ahead<input type="number" min="3" max="60" value={s.horizonMonths} onChange={(e) => setS({ ...s, horizonMonths: Number(e.target.value) })} /></label>
         </div>
-        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}><input type="checkbox" checked={s.projectSpending !== false} onChange={(e) => setS({ ...s, projectSpending: e.target.checked })} /> Include typical everyday spending in projections</label>
         <label className="f">Main account (where bills come out unless you say otherwise)
           <select value={PRIMARY_PREF} onChange={async (e) => { try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES ('primary_account', ?)", [e.target.value]); onChanged(); toast("Main account saved for all your devices"); } catch (err) { toast(err.message); } }}><option value="">Automatic (checking account your paycheck goes into)</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.nickname || a.name} · {a.org}</option>)}</select>
         </label>
@@ -1077,16 +1113,19 @@ function App() {
       if (settings.ghToken && settings.ghToken !== GH_SHARED) {
         try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES ('gh_token', ?)", [settings.ghToken]); GH_SHARED = settings.ghToken; } catch {}
       }
-      const [accounts, txs, recurring, sync] = await tursoBatch(settings, [
+      if (!window.__ovTable) { window.__ovTable = true; try { await q(settings, "CREATE TABLE IF NOT EXISTS rec_overrides (rec_id INTEGER NOT NULL, date TEXT NOT NULL, skip INTEGER DEFAULT 0, amount REAL, note TEXT, source TEXT, PRIMARY KEY (rec_id, date))"); } catch {} }
+      const [accounts, txs, recurring, sync, ovRows] = await tursoBatch(settings, [
         ["SELECT * FROM accounts ORDER BY sort, org, name"],
         ["SELECT id, account_id, posted, amount, description, pending, category, category_override FROM transactions WHERE posted >= ?", [since]],
         ["SELECT * FROM recurring ORDER BY kind DESC, day"],
         ["SELECT * FROM sync_log ORDER BY id DESC LIMIT 15"],
+        ["SELECT * FROM rec_overrides WHERE date >= ?", [addDays(todayStr(), -60)]],
       ]);
+      const overrides = Object.fromEntries((ovRows || []).map((o) => [ovKey(o.rec_id, o.date), o]));
       const dep = {}; const cutoff = addDays(todayStr(), -60);
       for (const t of txs) if (t.amount > 0 && t.posted >= cutoff) dep[t.account_id] = (dep[t.account_id] || 0) + t.amount;
       PRIMARY_AUTO = accounts.filter((a) => a.kind === "checking" && !a.hidden).sort((a, b) => (dep[b.id] || 0) - (dep[a.id] || 0))[0]?.id || "";
-      setData({ accounts, txs, recurring, sync, prefs: Object.fromEntries(prefs.map((r) => [r.key, r.value])) });
+      setData({ accounts, txs, recurring, sync, overrides, prefs: Object.fromEntries(prefs.map((r) => [r.key, r.value])) });
     } catch (e) {
       if (/no such table/i.test(e.message)) setErr("first-sync");
       else setErr(e.message);
@@ -1102,7 +1141,7 @@ function App() {
     const today = todayStr();
     const from = addDays(today, -120);
     const to = (() => { const d = new Date(); d.setMonth(d.getMonth() + (settings.horizonMonths || 18)); return ymd(d); })();
-    return Object.fromEntries(data.accounts.map((a) => [a.id, buildModel({ account: a, accounts: data.accounts, txs: data.txs, recurring: data.recurring, settings, from, to })]));
+    return Object.fromEntries(data.accounts.map((a) => [a.id, buildModel({ account: a, accounts: data.accounts, txs: data.txs, recurring: data.recurring, overrides: data.overrides, settings, from, to })]));
   }, [data, settings]);
 
   const refresh = async () => {
