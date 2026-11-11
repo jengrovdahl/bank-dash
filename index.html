@@ -277,7 +277,7 @@ function effRec(r, accounts) {
 function safeRe(p) { try { return p ? new RegExp(p, "i") : null; } catch { return null; } }
 const catOf = (t) => t.category_override || t.category || (t.amount > 0 ? "deposit" : "spent");
 // Main account: the one saved in the database, else the checking account that receives the most deposits (your paycheck).
-let PRIMARY_PREF = "", PRIMARY_AUTO = "";
+let PRIMARY_PREF = "", PRIMARY_AUTO = "", GH_SHARED = "";
 const defaultPrimary = (accounts) => (PRIMARY_PREF && accounts.some((a) => a.id === PRIMARY_PREF) ? PRIMARY_PREF : "") || PRIMARY_AUTO || (accounts.find((a) => a.kind === "checking" && !a.hidden) || accounts[0])?.id || "";
 
 // Build a full model for one account: past days from transactions, future from recurring.
@@ -387,7 +387,7 @@ function downloadCSV(name, rows) {
 async function gh(s, path, opts = {}) {
   const res = await fetch("https://api.github.com/repos/" + s.ghRepo + path, {
     ...opts,
-    headers: { Authorization: "Bearer " + s.ghToken, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers || {}) },
+    headers: { Authorization: "Bearer " + (s.ghToken || GH_SHARED), Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers || {}) },
   });
   if (res.status === 401 || res.status === 403) throw new Error("GitHub token was rejected. Check it in Settings.");
   if (res.status === 404) throw new Error("GitHub couldn't find the sync workflow. Check the repo name in Settings.");
@@ -976,7 +976,12 @@ function Recurring({ data, settings, onChanged, toast }) {
 function Settings({ settings, setSettings, data, onChanged, toast }) {
   const [s, setS] = useState(settings);
   useEffect(() => setS(settings), [settings]);
-  const saveConn = () => { setSettings(s); toast("Settings saved on this device"); };
+  const saveConn = async () => {
+    if (s.ghToken && s.ghToken !== GH_SHARED) {
+      try { await q(s, "INSERT OR REPLACE INTO settings (key, value) VALUES ('gh_token', ?)", [s.ghToken]); GH_SHARED = s.ghToken; } catch {}
+    }
+    setSettings(s); toast("Settings saved");
+  };
   const updAcct = async (a, field, value) => {
     try { await q(settings, `UPDATE accounts SET ${field} = ? WHERE id = ?`, [value, a.id]); onChanged(); } catch (e) { toast(e.message); }
   };
@@ -987,7 +992,7 @@ function Settings({ settings, setSettings, data, onChanged, toast }) {
         <label className="f">Turso database URL<input value={s.tursoUrl} onChange={(e) => setS({ ...s, tursoUrl: e.target.value })} /></label>
         <label className="f">Turso token for this dashboard<input type="password" value={s.tursoToken} onChange={(e) => setS({ ...s, tursoToken: e.target.value })} placeholder="Paste a token created in Turso" /></label>
         <label className="f">GitHub repo<input value={s.ghRepo} onChange={(e) => setS({ ...s, ghRepo: e.target.value })} /></label>
-        <label className="f">GitHub token for the Refresh button (fine-grained, Actions: read &amp; write, this repo only)<input type="password" value={s.ghToken} onChange={(e) => setS({ ...s, ghToken: e.target.value })} /></label>
+        <label className="f">GitHub token for the Refresh button (shared with all your devices){!s.ghToken && GH_SHARED ? <span className="muted" style={{ fontSize: 12 }}> · already set up from another device</span> : null}<input type="password" autoComplete="off" value={s.ghToken} onChange={(e) => setS({ ...s, ghToken: e.target.value })} placeholder={GH_SHARED ? "Set — leave blank to keep it" : ""} /></label>
         <div className="row" style={{ gap: 12 }}>
           <label className="f">Warn me when balance drops under<input type="number" value={s.lowBalance} onChange={(e) => setS({ ...s, lowBalance: Number(e.target.value) })} /></label>
           <label className="f">Project this many months ahead<input type="number" min="3" max="60" value={s.horizonMonths} onChange={(e) => setS({ ...s, horizonMonths: Number(e.target.value) })} /></label>
@@ -1027,16 +1032,19 @@ function Settings({ settings, setSettings, data, onChanged, toast }) {
   );
 }
 
+// A real login-style form so Chrome's password manager offers to save the token
+// and fills it in automatically on any computer signed into the same Chrome profile.
 function Setup({ settings, setSettings }) {
   const [s, setS] = useState(settings);
+  const submit = (e) => { e.preventDefault(); if (s.tursoUrl && s.tursoToken) setSettings(s); };
   return (
-    <div className="card grid" style={{ maxWidth: 640, margin: "40px auto" }}>
+    <form className="card grid" style={{ maxWidth: 640, margin: "40px auto" }} onSubmit={submit} method="post" action="#" autoComplete="on">
       <h2 style={{ fontSize: 24 }}>Connect your dashboard</h2>
-      <p className="muted" style={{ margin: 0 }}>This is a one-time step on each device. Nothing you enter here is in the page's code; it stays in this browser only.</p>
-      <label className="f">Turso database URL<input value={s.tursoUrl} onChange={(e) => setS({ ...s, tursoUrl: e.target.value })} /></label>
-      <label className="f">Turso token<input type="password" value={s.tursoToken} onChange={(e) => setS({ ...s, tursoToken: e.target.value })} placeholder="Paste the token from Turso" /></label>
-      <div><button className="btn primary" disabled={!s.tursoUrl || !s.tursoToken} onClick={() => setSettings(s)}>Connect</button></div>
-    </div>
+      <p className="muted" style={{ margin: 0 }}>When Chrome offers to save this, say <b>Save</b>. After that, any computer signed into your Chrome fills it in for you — just click Connect.</p>
+      <label className="f">Turso database URL<input name="username" autoComplete="username" value={s.tursoUrl} onChange={(e) => setS({ ...s, tursoUrl: e.target.value })} /></label>
+      <label className="f">Turso token<input name="password" type="password" autoComplete="current-password" autoFocus value={s.tursoToken} onChange={(e) => setS({ ...s, tursoToken: e.target.value })} placeholder="Paste the token from Turso (or let Chrome fill it)" /></label>
+      <div><button type="submit" className="btn primary" disabled={!s.tursoUrl || !s.tursoToken}>Connect</button></div>
+    </form>
   );
 }
 
@@ -1063,6 +1071,12 @@ function App() {
       if (!window.__migrated) { window.__migrated = true; for (const sql of ["ALTER TABLE recurring ADD COLUMN loan_account_id TEXT", "ALTER TABLE recurring ADD COLUMN apr REAL"]) { try { await q(settings, sql); } catch {} } }
       const prefs = await q(settings, "SELECT key, value FROM settings").catch(() => []);
       PRIMARY_PREF = (prefs.find((r) => r.key === "primary_account") || {}).value || "";
+      // The Refresh button's GitHub token is shared through the database, so each new
+      // computer only needs the Turso token. A device that already has one shares it.
+      GH_SHARED = (prefs.find((r) => r.key === "gh_token") || {}).value || "";
+      if (settings.ghToken && settings.ghToken !== GH_SHARED) {
+        try { await q(settings, "INSERT OR REPLACE INTO settings (key, value) VALUES ('gh_token', ?)", [settings.ghToken]); GH_SHARED = settings.ghToken; } catch {}
+      }
       const [accounts, txs, recurring, sync] = await tursoBatch(settings, [
         ["SELECT * FROM accounts ORDER BY sort, org, name"],
         ["SELECT id, account_id, posted, amount, description, pending, category, category_override FROM transactions WHERE posted >= ?", [since]],
@@ -1092,7 +1106,7 @@ function App() {
   }, [data, settings]);
 
   const refresh = async () => {
-    if (!settings.ghToken) { toast("Add a GitHub token in Settings to use Refresh now"); setTab("settings"); return; }
+    if (!settings.ghToken && !GH_SHARED) { toast("Add a GitHub token in Settings to use Refresh now"); setTab("settings"); return; }
     try {
       setRefreshing("Starting…");
       const started = new Date(Date.now() - 5000).toISOString();
